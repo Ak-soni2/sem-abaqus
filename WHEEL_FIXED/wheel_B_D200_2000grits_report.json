@@ -1,0 +1,31 @@
+{
+  "wheel": {
+    "surface_area_mm2": 1047.1975511965977,
+    "source": "areal_density",
+    "areal_density_per_mm2": 1.91,
+    "uncapped_grains": 2000,
+    "requested_grains": 2000,
+    "capped": false,
+    "achieved_grains": 2000,
+    "achieved_areal_density_per_mm2": 1.909859317102744,
+    "min_spacing_mm": 0.013893226824153435,
+    "spacing_limited_by_grain_size": false,
+    "n_rejected_overlaps": 0,
+    "mean_grain_footprint_mm": 0.004123340726096969,
+    "body_nodes": 1708,
+    "body_elements": 1080,
+    "min_hex_volume_mm3": 4.646072140337932,
+    "sector_deg": 30.0,
+    "rim_depth_mm": 5.0
+  },
+  "export": {
+    "path": "WHEEL_FIXED\\wheel_B_D200_2000grits.inp",
+    "n_grain_parts": 96,
+    "n_instances": 2001,
+    "n_grain_elements": 233992,
+    "n_body_elements": 1080,
+    "grain_element": "R3D3",
+    "grain_parts": "shared"
+  },
+  "warnings": []
+}

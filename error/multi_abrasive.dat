@@ -1,0 +1,207 @@
+1
+
+   Abaqus 2024                                  Date 12-Aug-2026   Time 22:55:57
+   For use by Supplied by Team-SolidSQUAD under license from Dassault Systemes or its subsidiary.
+
+
+
+                         The Abaqus Software is a product of:
+
+                           Dassault Systemes SIMULIA Corp.
+                           1301 Atwood Avenue, Suite 101W
+                              Johnston, RI 02919, USA
+ 
+
+
+                   The Abaqus Software is available only under license
+                   from Dassault Systemes or its subsidiary and may be
+                   used or reproduced only in accordance with the terms
+                   of such license.
+ 
+                          On machine DESKTOP-0RIO4KF 
+                          you are authorized to run
+                          Abaqus/Explicit until 31-Dec-2055
+
+                          Your site id is:  
+
+
+ 
+                    For assistance or any other information you may
+                    obtain contact information for your local office
+                    from the world wide web at:
+
+                      https://www.3ds.com/products-services/simulia/services-support/
+
+ 
+                * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * 
+                *                                                         * 
+                *                   *****************                     * 
+                *                   *  N O T I C E  *                     * 
+                *                   *****************                     * 
+                *                                                         * 
+                *                                                         * 
+                *                       Abaqus 2024                       * 
+                *                                                         * 
+                *       BUILD ID: 2023_09_21-18.25.25 RELr426 190762      * 
+                *                                                         * 
+                *                                                         * 
+                *  Please make sure you are using                         * 
+                *  release Abaqus 2024 manuals                            * 
+                *  plus the notes accompanying this release.              * 
+                *                                                         * 
+                *                                                         * 
+                *                                                         * 
+                *                                                         * 
+                * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * 
+
+
+ 
+
+
+
+     PROCESSING PART, INSTANCE, AND ASSEMBLY INFORMATION
+   *******************************************************
+
+
+     END PROCESSING PART, INSTANCE, AND ASSEMBLY INFORMATION
+   ***********************************************************
+
+
+
+
+     OPTIONS BEING PROCESSED
+   ***************************
+
+
+  *Heading
+  *Element, type=R3D4
+  *Element, type=R3D3
+  *Element, type=MASS
+  *Element, type=ROTARYI
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_BORE
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_OUTER
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_SECTOR_END
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_SECTOR_START
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_ZMAX
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_BOND_ZMIN
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_GRITS
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_MASS
+  *Elset, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ROTI
+  *Element, type=C3D8R
+  *Elset, elset=ASSEMBLY_WP-1_ES_WP_GROUND
+  *Elset, elset=ASSEMBLY_WP-1_WP_ALL
+  *Elset, elset=ASSEMBLY_A_WP_ALL
+  *material, name=STONE
+  *density
+  *depvar, delete=12
+  *usermaterial, constants=56
+
+ ***ERROR: THERE ARE INVALID DATA ASSOCIATED WITH THIS USER DEFINED MATERIAL 
+           DEFINITION
+ ***NOTE: DUE TO AN INPUT ERROR THE ANALYSIS PRE-PROCESSOR HAS BEEN UNABLE TO 
+          INTERPRET SOME DATA.  SUBSEQUENT ERRORS MAY BE CAUSED BY THIS OMISSION
+  *mass, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_MASS
+  *rotaryinertia, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ROTI
+  *solidsection, elset=ASSEMBLY_WP-1_WP_ALL, controls=EC-1, material=STONE
+  *sectioncontrols, name=EC-1, hourglass=ENHANCED, elementdeletion=YES
+
+ ***WARNING: THE PARAMETER HOURGLASS ON THE *SECTION CONTROLS OPTION IS 
+             RELEVANT FOR SOLID, MEMBRANE, AND SHELL ELEMENTS WITH REDUCED 
+             INTEGRATION WHEREVER APPLICABLE. THIS WARNING CAN BE IGNORED IF 
+             THE FEATURE IS APPLIED TO THESE ELEMENT TYPES ONLY.
+  *solidsection, elset=ASSEMBLY_WP-1_WP_ALL, controls=EC-1, material=STONE
+  *mass, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_MASS
+  *rotaryinertia, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ROTI
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WP-1_WP_GROUND_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WP_GROUND_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WP-1_WP_GROUND_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WP_GROUND_SURF
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *surfaceinteraction, name=INTPROP-1
+  *friction
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *boundary
+  *boundary, type=VELOCITY
+  *solidsection, elset=ASSEMBLY_WP-1_WP_ALL, controls=EC-1, material=STONE
+  *rigidbody, refnode=ASSEMBLY_WHEEL-1_WHEEL_REF, elset=ASSEMBLY_WHEEL-1_ES_WHEEL_ALL
+  *initialconditions, type=FIELD, variable=1
+  *friction
+  *initialconditions, type=FIELD, variable=1
+  *elementoutput, elset=ASSEMBLY_A_WP_ALL, directions=YES
+  *output, field, numberinterval=60
+  *output, history, variable=PRESELECT
+  *output, history, timeinterval=9e-09
+  *Step, name=Step-1, nlgeom=YES
+  *Step, name=Step-1, nlgeom=YES
+  *dynamic, explicit
+  *fixedmassscaling, factor=10
+  *boundary, type=VELOCITY
+  *output, field, numberinterval=60
+  *nodeoutput
+  *elementoutput, elset=ASSEMBLY_A_WP_ALL, directions=YES
+  *output, history, variable=PRESELECT
+  *output, history, timeinterval=9e-09
+  *nodeoutput, nset=ASSEMBLY_A_WHEEL_REF
+  *endstep
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WHEEL-1_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_WP-1_WP_GROUND_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WHEEL_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_GRITS_SURF
+  *surface, type=ELEMENT, name=ASSEMBLY_A_WP_GROUND_SURF
+  *surfaceinteraction, name=INTPROP-1
+  *friction
+  *boundary
+  *Step, name=Step-1, nlgeom=YES
+  *dynamic, explicit
+  *boundary, type=VELOCITY
+  *contact, op=NEW
+  *contactinclusions
+  *contactpropertyassignment
+  *endstep
+
+
+
+                            P R O B L E M   S I Z E
+
+
+          NUMBER OF ELEMENTS IS                                164170
+          NUMBER OF NODES IS                                   175948
+          NUMBER OF NODES DEFINED BY THE USER                  175948
+          TOTAL NUMBER OF VARIABLES IN THE MODEL               527847
+          (DEGREES OF FREEDOM PLUS MAX NO. OF ANY LAGRANGE MULTIPLIER
+           VARIABLES. INCLUDE *PRINT,SOLVE=YES TO GET THE ACTUAL NUMBER.)
+
+
+
+
+
+          THE PROGRAM HAS DISCOVERED     1 FATAL ERRORS
+
+               ** EXECUTION IS TERMINATED **
+
+
+
+                              END OF USER INPUT PROCESSING
+
+
+
+     JOB TIME SUMMARY
+       USER TIME (SEC)      =      3.2    
+       SYSTEM TIME (SEC)    =     0.30    
+       TOTAL CPU TIME (SEC) =      3.5    
+       WALLCLOCK TIME (SEC) =            4

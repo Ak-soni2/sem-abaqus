@@ -1,0 +1,37 @@
+# Line endings are NOT cosmetic in this project.
+#
+# Every writer in semgrit opens with newline="\n" on purpose, and
+# _check_presets.py compares generated .inp files against frozen references BYTE
+# FOR BYTE. If git normalised to CRLF on checkout, a fresh clone would fail that
+# gate for a reason that has nothing to do with geometry -- and fixed-form
+# Fortran with stray CR characters is its own class of misery.
+#
+# So: LF everywhere, with two deliberate exceptions.
+* text=auto eol=lf
+
+# run.bat is written with \r\n on purpose -- cmd.exe is happier with it.
+*.bat text eol=crlf
+
+# Fortran is fixed-form: columns matter, and a CR inside column 72 is a bug.
+*.for text eol=lf
+*.f   text eol=lf
+*.inc text eol=lf
+
+# Abaqus input decks: LF, and byte-compared by a gate.
+*.inp text eol=lf
+*.sh  text eol=lf
+
+# Binary -- never touch these.
+*.pkl binary
+*.npy binary
+*.tif binary
+*.tiff binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.zip binary
+*.glb binary
+
+# Notebooks are JSON; diffing them is noisy but they must not be mangled.
+*.ipynb text eol=lf

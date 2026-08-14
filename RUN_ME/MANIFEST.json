@@ -1,0 +1,167 @@
+{
+  "_provenance": {
+    "built_utc": "2026-08-14T12:03:55+00:00",
+    "python": "3.12.10",
+    "vumat_grind.for": {
+      "sha256": "c7af2fe54b110fab3b9ffbb3b817c98e160ce99adab130c6a6649907cef771a5",
+      "bytes": 41167
+    },
+    "vumat_grind2.for": {
+      "sha256": "25946dcd6ae7dd91e12706df692f38c33332edce8767449313d6eebf23c49f1c",
+      "bytes": 47527
+    },
+    "vumat_jh2.for": {
+      "sha256": "a98b6167e3ac9461bac8bc0a7fd30c30ce7286bea78c249796d6ee82ae308df6",
+      "bytes": 26880
+    },
+    "grain_library": {
+      "name": "grain_library.pkl",
+      "sha256": "1ba76060e57e1be097ed856783f845a228be59a769990786f88709cadf6cb170",
+      "bytes": 851157
+    },
+    "semgrit/hybrid.py": {
+      "sha256": "29b09c81b6270cbc"
+    },
+    "semgrit/materials.py": {
+      "sha256": "db3d1c68581759bd"
+    },
+    "semgrit_multi/envelope.py": {
+      "sha256": "daa73532ec7a77bb"
+    },
+    "semgrit_multi/swmode.py": {
+      "sha256": "c364b1dcacca38c3"
+    }
+  },
+  "_material": {
+    "key": "sandstone",
+    "label": "Sandstone (JH-2, the project's original card)",
+    "inp_material": "STONE",
+    "jh2": [
+      3735.6,
+      2686.0,
+      1982.0,
+      1374.0,
+      8.0,
+      0.71,
+      0.3,
+      0.022,
+      0.55,
+      0.4,
+      1.0,
+      0.002,
+      1.2,
+      9000.0,
+      22000.0,
+      0.25,
+      912.0
+    ],
+    "density_kg_m3": 2350.0,
+    "dc_nm": 87.74999999999999,
+    "depth_of_cut_um": 0.2,
+    "notes": [
+      "E = 6500 MPa and nu = 0.21 are exactly this card's K1 and G, so both",
+      "branches share one elasticity and the stable increment is",
+      "unambiguous. A = 90 MPa is the card's own quasi-static uniaxial",
+      "compressive strength. B, n, C, m and D1..D5 are PLACEHOLDERS."
+    ]
+  },
+  "1_single_abrasive": {
+    "command": "abaqus job=single_abrasive input=single_abrasive.inp user=vumat_grind.for double=both cpus=8 interactive",
+    "subroutine": "vumat_grind.for",
+    "n_props": 56,
+    "n_depvar": 20,
+    "dc_nm": 87.74999999999999,
+    "n_grits": 1,
+    "n_elements": 54080,
+    "chip_field": {
+      "theta_c_rad": 0.04,
+      "h0_mm": 6.216743874395058e-05,
+      "hg": -0.003703167793132015,
+      "rtip_mm": 25.003617919856907,
+      "u_gov_mm": 0.015491911297083973,
+      "h_entry_mm": 0.0,
+      "h_exit_mm": 0.00013952513267536114,
+      "transition_u_mm": -0.007187235448543109
+    },
+    "h_source": 0,
+    "what": "chip thickness from the four wedge constants in the card"
+  },
+  "2_multi_abrasive": {
+    "command": "abaqus job=multi_abrasive input=multi_abrasive_field.inp user=vumat_grind.for double=both cpus=8 interactive",
+    "subroutine": "vumat_grind.for",
+    "n_props": 56,
+    "n_depvar": 20,
+    "dc_nm": 87.74999999999999,
+    "n_grits": 12,
+    "n_grits_engaged": 10,
+    "n_elements": 54080,
+    "split": {
+      "dc_mm": 8.774999999999999e-05,
+      "n_elements": 54080,
+      "n_cut": 454,
+      "n_never_cut": 53626,
+      "n_ductile_of_cut": 246,
+      "n_brittle_of_cut": 208,
+      "ductile_fraction_of_cut": 0.5418502202643172,
+      "n_ductile_law": 37022,
+      "n_brittle_law": 17058
+    },
+    "h_source": 1,
+    "envelope": {
+      "n_grits_total": 12,
+      "n_grits_engaged": 10,
+      "n_surface_points_swept": 2364,
+      "time_samples_min": 114,
+      "time_samples_max": 910,
+      "depth_resolution_nm": 0.19999999999999998,
+      "facet_subdivision": 2,
+      "station_step_um": 0.30000000000000004,
+      "max_depth_removed_um": 0.13172279588857805,
+      "mean_depth_removed_um": 0.005125990300804449,
+      "h_cut_min_um": 0.0006327055714905327,
+      "h_cut_max_um": 0.13172279588857805,
+      "h_cut_mean_um": 0.0767775032453125,
+      "n_elements": 54080,
+      "n_elements_cut": 454,
+      "n_elements_never_cut": 53626,
+      "never_cut_filled_from_nearest": true,
+      "fill_method": "scipy nearest-neighbour",
+      "removed_volume_mm3": 4.920950688772271e-09,
+      "surface_layer_um": 0.03,
+      "elements_through_deepest_cut": 4.390759862952602
+    },
+    "what": "chip thickness swept per element, carried as field variable 1"
+  },
+  "3_energy_criterion": {
+    "command": "abaqus job=energy_criterion input=energy_criterion.inp user=vumat_grind2.for double=both cpus=8 interactive",
+    "subroutine": "vumat_grind2.for",
+    "n_props": 58,
+    "n_depvar": 22,
+    "swmode": 2,
+    "psi": "0 = derived from dc, threshold H*dc",
+    "dc_nm": 87.74999999999999,
+    "h_source": 1,
+    "what": "geometric split plus the local W_p L_c >= PSI Kc^2/E rule"
+  },
+  "4_ablation": {
+    "forced_brittle": {
+      "command": "abaqus job=forced_brittle input=forced_brittle.inp user=vumat_grind.for double=both cpus=8 interactive",
+      "h_source": 3,
+      "subroutine": "vumat_grind.for",
+      "why": "Johnson-Holmquist II everywhere. Bit-identical to vumat_jh2.for, so this arm is the published brittle model on this geometry."
+    },
+    "forced_ductile": {
+      "command": "abaqus job=forced_ductile input=forced_ductile.inp user=vumat_grind.for double=both cpus=8 interactive",
+      "h_source": 2,
+      "subroutine": "vumat_grind.for",
+      "why": "Johnson-Cook + SGE everywhere. The switch is disabled; every point is ductile regardless of its chip thickness."
+    },
+    "geometric_hybrid": {
+      "command": "abaqus job=geometric_hybrid input=geometric_hybrid.inp user=vumat_grind.for double=both cpus=8 interactive",
+      "h_source": 1,
+      "subroutine": "vumat_grind.for",
+      "why": "the hybrid law, h from the swept field. The deck as shipped."
+    },
+    "_what": "The same deck as 2_multi_abrasive with PROPS(56) changed and nothing else. forced_brittle is bit-identical to vumat_jh2.for, so the hybrid arm sits bracketed between two known references instead of standing alone."
+  }
+}

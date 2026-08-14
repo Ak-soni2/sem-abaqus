@@ -1,0 +1,8 @@
+numpy>=1.24
+scipy>=1.10
+opencv-python-headless>=4.8
+scikit-image>=0.21
+shapely>=2.0
+mapbox-earcut>=1.0
+Pillow>=10.0
+matplotlib>=3.7

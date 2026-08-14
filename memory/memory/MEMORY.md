@@ -1,0 +1,4 @@
+- [SEM grinding wheel → Abaqus goal](sem-grinding-wheel-abaqus-goal.md) — the pipeline's real deliverable is an Abaqus-importable wheel with an angular-sector option
+- [Zeiss SEM pixel size & the 15-30x scale bug](sem-wheel-scale-bug.md) — exact pixel size lives in TIFF tag 34118; never trust the drawn scale bar alone
+- [semgrit package layout](semgrit-package-layout.md) — module roles, CLI entry points, the working Python interpreter, and the verify_all.py gate
+- [Wheel is all discrete rigid](wheel-all-discrete-rigid.md) — bond included, not just the grits; only the workpiece is deformable
