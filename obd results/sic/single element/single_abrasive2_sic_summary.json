@@ -1,0 +1,32 @@
+{
+  "odb": "single_abrasive2_sic.odb",
+  "step": "Step-1",
+  "frames": 61,
+  "forces": {
+    "peak_magnitude_N": 0.030682000326513758,
+    "peak_time_s": 1.1961025165874162e-06,
+    "peak_normal_N": 0.002100995397492311,
+    "peak_tangential_N": 0.010330791221130186,
+    "mean_normal_N": -0.006816666364453086,
+    "mean_tangential_N": 0.0018769386603529482,
+    "first_contact_s": 1.2604388643921993e-08,
+    "csv": "single_abrasive2_sic_forces.csv",
+    "force_ratio_Ft_over_Fn": -0.2753455369534634
+  },
+  "energy": {
+    "ALLIE_final": 2.7247901016380638e-05,
+    "ALLAE_final": 8.515706213074736e-06,
+    "ALLKE_final": 0.008740118704736233,
+    "artificial_fraction": 0.31252705329321856,
+    "kinetic_fraction": 320.76300847841196,
+    "csv": "single_abrasive2_sic_energy.csv"
+  },
+  "removal": {
+    "elements_total": 54080,
+    "elements_deleted": 4151,
+    "deleted_fraction": 0.07675665680473373,
+    "removed_volume_mm3_approx": 1.1207699999999998e-07,
+    "volume_is_approximate": true
+  },
+  "specific_energy_J_mm3": 0.9043308158013204
+}
