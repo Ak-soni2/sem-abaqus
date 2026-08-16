@@ -21,6 +21,15 @@
 #    PROBE_*/                     the field-variable probes
 #    error/                       the .dat files from the one real submission
 #    *.tif                        the SEM micrographs -- source data
+#    CAE_SCRIPTS/                 hand-written CAE repair utilities. Nothing
+#                                 in the pipeline emits them, so unlike every
+#                                 other *_import_into_cae.py in the tree they
+#                                 cannot be regenerated.
+#    REPOST/                      re-post-processing kit for the six .odb
+#                                 files that have already been solved
+#    obd results/                 the force and energy traces those six runs
+#                                 produced. The .odb files themselves are
+#                                 excluded (GB each); these are the numbers.
 #
 #  Anything regenerable by running a script is NOT tracked. Rebuild with:
 #    python _make_run_packages.py --all
@@ -53,7 +62,8 @@ results/
 wheel_30deg/
 cad/
 CAE_CHECK/
-CAE_SCRIPTS/
+# NOT CAE_SCRIPTS/ -- see the force-add at the bottom. Its three files are
+# hand-written CAE repair utilities, not pipeline output.
 
 # ---- scratch directories written by the gates and builders -------------------
 # _colabcheck holds the notebook payload unpacked; _runbuild_* is where the
