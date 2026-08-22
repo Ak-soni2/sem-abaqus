@@ -78,6 +78,22 @@ class WorkpieceBlock:
     max_depth_element_mm: float = 0.0
     """Cap on layer thickness, to stop the deep elements becoming slivers. 0 = no cap."""
 
+    # Graded mesh ACROSS the face, the same idea applied to the axial direction.
+    #
+    # Worth having for the same reason the depth grading is, and more so. A grit a few
+    # microns across cuts a groove a few microns wide in a block 20 um wide, so a
+    # uniform axial mesh spends most of its elements far from anything that happens.
+    # Refining only the groove lane is what lets the axial size come down to something
+    # comparable to the cutting size -- which is what fixes the aspect ratio -- without
+    # paying for it across the whole face. Free in time, like the depth grading: the
+    # stable increment already follows the much smaller depth element.
+    #
+    # 0 keeps the uniform axial mesh, so existing decks are unaffected.
+    width_band_mm: float = 0.0
+    """Width of the finely meshed lane, centred on the face. 0 = uniform mesh."""
+    width_growth: float = 1.3
+    """Geometric ratio applied to successive columns outside the fine lane."""
+
     def requested_sizes(self) -> tuple[float, float, float]:
         h = self.element_size_mm
         return (self.element_size_length_mm or h,
@@ -119,10 +135,49 @@ class WorkpieceBlock:
         dz = np.diff(w)
         return float(dz.min()), float(dz.max())
 
+    def width_coordinates(self) -> np.ndarray:
+        """Node positions across the face, from -width/2 to +width/2.
+
+        Symmetric about the centre, unlike the depth: the groove runs down the middle
+        of the block, so both edges are equally far from it and are coarsened alike.
+        Returns the plain uniform spacing when ``width_band_mm`` is 0.
+        """
+        half = self.width_mm / 2.0
+        h0 = self.requested_sizes()[1]
+        if self.width_band_mm <= 0:
+            nw = max(int(round(self.width_mm / h0)), 1)
+            return np.linspace(-half, half, nw + 1)
+
+        g = max(self.width_growth, 1.0)
+        # Build one half, centre outwards, then mirror it.
+        xs = [0.0]
+        for _ in range(max(int(round(0.5 * self.width_band_mm / h0)), 1)):
+            if xs[-1] + h0 >= half - 1e-12:
+                break
+            xs.append(xs[-1] + h0)
+        h = h0
+        while xs[-1] < half - 1e-12:
+            h = h * g
+            if xs[-1] + h >= half - 1e-12:
+                break
+            xs.append(xs[-1] + h)
+        # Same reasoning as the depth: absorb the remainder rather than leave a sliver
+        # at the edge, which would become the smallest element and set the increment.
+        if half - xs[-1] < h0 and len(xs) > 1:
+            xs[-1] = half
+        else:
+            xs.append(half)
+        pos = np.asarray(xs, dtype=np.float64)
+        return np.concatenate([-pos[:0:-1], pos])
+
+    def width_column_range(self) -> tuple[float, float]:
+        dv = np.diff(self.width_coordinates())
+        return float(dv.min()), float(dv.max())
+
     def divisions(self) -> tuple[int, int, int]:
-        hl, hw, hd = self.requested_sizes()
+        hl, _hw, _hd = self.requested_sizes()
         return (max(int(round(self.length_mm / hl)), 1),
-                max(int(round(self.width_mm / hw)), 1),
+                len(self.width_coordinates()) - 1,
                 len(self.depth_coordinates()) - 1)
 
     def element_sizes(self) -> tuple[float, float, float]:
@@ -133,8 +188,11 @@ class WorkpieceBlock:
         this would understate the stable increment. The depth entry is the *finest*
         layer, since that is the one the stable increment sees.
         """
-        nl, nw, _ = self.divisions()
-        return (self.length_mm / nl, self.width_mm / nw, self.depth_layer_range()[0])
+        nl, _nw, _nd = self.divisions()
+        # The width entry is the FINEST column for the same reason the depth entry is
+        # the finest layer: with a graded face the mean says nothing about dt.
+        return (self.length_mm / nl, self.width_column_range()[0],
+                self.depth_layer_range()[0])
 
     def min_element_size(self) -> float:
         """The dimension that sets the stable time increment.
@@ -207,10 +265,13 @@ def build_block_mesh(
     """Structured C3D8R block. ``e_depth`` points away from the ground face."""
     nl, nw, nd = wp.divisions()
     u = np.linspace(-wp.length_mm / 2.0, wp.length_mm / 2.0, nl + 1)
-    v = np.linspace(-wp.width_mm / 2.0, wp.width_mm / 2.0, nw + 1)
-    # Not a linspace: the depth may be graded, fine at the ground face and coarsening
-    # into the body. ``depth_coordinates`` returns the uniform case unchanged.
+    # Neither v nor w is necessarily a linspace: the depth may be graded fine at the
+    # ground face, and the width fine down the groove lane. Both helpers return the
+    # uniform case unchanged, so an ungraded deck is byte-identical to before.
+    v = wp.width_coordinates()
     w = wp.depth_coordinates()
+    if len(v) - 1 != nw:
+        raise ValueError("width coordinates disagree with divisions()")
     if len(w) - 1 != nd:
         raise ValueError("depth coordinates disagree with divisions()")
 

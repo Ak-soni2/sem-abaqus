@@ -9,7 +9,7 @@
 | JH-2 `K1, G, HEL, PHEL, T` | 204785, 183000, 14457, 5900, 370 MPa |
 | density | 3163 kg/m3 |
 | hardness `H`, toughness `Kc` | 25000 MPa, 3.5 MPa*sqrt(m) |
-| estimated wall clock, 8 cores | 3.34 h per package |
+| estimated wall clock, 8 cores | 152.76 h per package |
 
 > The JH-2 card is the supplied one, unchanged. The Johnson-Cook
 > constants other than A are PLACEHOLDERS: B, n, m and D1..D5 are
@@ -51,9 +51,9 @@ cd 3_energy_criterion
 abaqus job=energy_criterion input=energy_criterion.inp user=vumat_grind2.for double=both cpus=8 interactive
 
 cd 4_ablation
-cd forced_brittle && abaqus job=forced_brittle input=forced_brittle.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
-cd forced_ductile && abaqus job=forced_ductile input=forced_ductile.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
-cd geometric_hybrid && abaqus job=geometric_hybrid input=geometric_hybrid.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
+cd 3_forced_brittle && abaqus job=forced_brittle input=forced_brittle.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
+cd 2_forced_ductile && abaqus job=forced_ductile input=forced_ductile.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
+cd 1_geometric_hybrid && abaqus job=geometric_hybrid input=geometric_hybrid.inp user=vumat_grind.for double=both cpus=8 interactive && cd ..
 
 ```
 
@@ -81,6 +81,20 @@ bracket makes Abaqus read part of it as a separate argument and abort.
 ```
 abaqus python <name>_postprocess_odb.py <job>.odb
 ```
+
+That writes the CSVs and the summary JSON. It also tries to draw the
+figures, but **Abaqus' bundled Python usually has no matplotlib**, so in
+practice it writes data and no pictures -- which is why the first six runs
+of this project ended up documented by photographs of a screen. Draw them
+with the host Python instead, which needs no Abaqus and no re-run:
+
+```
+python REPOST/plots.py <folder holding the CSVs>
+```
+
+It also writes `compare_all.png` across every job it finds, and marks on
+the figures anything that should stop a number being quoted -- artificial
+energy over 5% of internal, and byte-identical duplicate datasets.
 
 ## What the three should show
 

@@ -584,32 +584,53 @@ def main(argv):
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            # Units are scaled at the axis (us, mN, nm). Leaving SI here puts a
+            # "1e-6" offset in the corner and nanometre data in the fifth decimal.
             if forces:
-                fig, ax = plt.subplots(figsize=(8, 4))
-                ax.plot(t, fn, label="normal")
-                ax.plot(t, ft, label="tangential")
-                ax.set_xlabel("time (s)")
-                ax.set_ylabel("force (N)")
-                ax.set_title("grinding force")
+                fig, ax = plt.subplots(figsize=(9, 4.4))
+                ax.plot([x * 1e6 for x in t], [y * 1e3 for y in fn],
+                        color="#0072B2", lw=1.2, label="normal")
+                ax.plot([x * 1e6 for x in t], [y * 1e3 for y in ft],
+                        color="#D55E00", lw=1.2, label="tangential")
+                _fc = forces.get("first_contact_s")
+                if _fc:
+                    ax.axvline(_fc * 1e6, color="#666666", ls=":",
+                               lw=1.2, label="first contact")
+                ax.set_xlabel("time (us)")
+                ax.set_ylabel("force on the wheel (mN)")
+                ax.set_title("%s -- grinding force" % os.path.basename(base))
                 ax.legend()
                 ax.grid(alpha=0.3)
                 fig.tight_layout()
-                fig.savefig(base + "_forces.png", dpi=120)
+                fig.savefig(base + "_forces.png", dpi=200)
                 print("wrote      : %s" % os.path.basename(base + "_forces.png"))
             if out.get("force_vs_h") and t:
-                fig, ax = plt.subplots(figsize=(8, 4))
-                ax.plot(hs, fn, ".", ms=2, label="normal")
-                ax.plot(hs, ft, ".", ms=2, label="tangential")
+                fig, ax = plt.subplots(figsize=(9, 4.4))
+                # h in nm: dc is tens of nanometres, so millimetres put every
+                # interesting point in the fifth decimal -- and the dc label was
+                # already quoting nm, so the axis and the legend disagreed.
+                hn = [x * 1e6 for x in hs]
+                ax.plot(hn, [y * 1e3 for y in fn], ".", ms=2, color="#0072B2",
+                        label="normal")
+                ax.plot(hn, [y * 1e3 for y in ft], ".", ms=2, color="#D55E00",
+                        label="tangential")
                 if dc_mm:
-                    ax.axvline(dc_mm, color="k", ls="--", lw=1,
-                               label="dc = %.1f nm" % (dc_mm * 1e6))
-                ax.set_xlabel("undeformed chip thickness h (mm)")
-                ax.set_ylabel("force (N)")
-                ax.set_title("force against chip thickness -- the size effect")
+                    d_nm = dc_mm * 1e6
+                    ax.axvline(d_nm, color="k", ls="--", lw=1.2,
+                               label="dc = %.1f nm" % d_nm)
+                    ax.axvspan(0, d_nm, color="#0072B2", alpha=0.07)
+                    ax.text(0.02, 0.95, "ductile  h < dc", transform=ax.transAxes,
+                            fontsize=9, color="#0072B2", va="top")
+                    ax.text(0.98, 0.95, "brittle  h > dc", transform=ax.transAxes,
+                            fontsize=9, color="#D55E00", va="top", ha="right")
+                ax.set_xlabel("undeformed chip thickness h (nm)")
+                ax.set_ylabel("force on the wheel (mN)")
+                ax.set_title("%s -- force against chip thickness (the size "
+                             "effect)" % os.path.basename(base))
                 ax.legend()
                 ax.grid(alpha=0.3)
                 fig.tight_layout()
-                fig.savefig(base + "_force_vs_h.png", dpi=120)
+                fig.savefig(base + "_force_vs_h.png", dpi=200)
                 print("wrote      : %s"
                       % os.path.basename(base + "_force_vs_h.png"))
             if sdv and sdv.get("n_ductile_alive") is not None:
@@ -629,35 +650,93 @@ def main(argv):
                             if not alive.get(e, True):
                                 v = -1.0
                             grid[k][i] = v
-                    fig, ax = plt.subplots(figsize=(10, 3.2))
+                    # FOUR DISCRETE CATEGORIES, so a discrete colormap. coolwarm
+                    # is continuous and diverging: it rendered deleted and unset
+                    # as near-identical pale blues and ductile and brittle as
+                    # near-identical pale reds -- the one distinction the figure
+                    # exists to show. Blue/vermillion also survives colour
+                    # blindness, which the green/red pair used elsewhere does not.
+                    from matplotlib.colors import BoundaryNorm, ListedColormap
+                    cmap = ListedColormap(["#BBBBBB", "#FFFFFF",
+                                           "#0072B2", "#D55E00"])
+                    norm = BoundaryNorm([-1.5, -0.5, 0.5, 1.5, 2.5], cmap.N)
+                    # Axes in microns, not element indices: the reader cannot
+                    # judge "how deep did the brittle zone reach" from an index.
+                    cost = rep.get("cost") or {}
+                    ex = (cost.get("element_size_cutting_mm") or 0) * 1000.0 * nl
+                    ey = (cost.get("depth_layer_min_mm") or 0) * 1000.0 * nd
+                    extent = ([0, ex, ey, 0] if ex and ey else None)
+                    fig, ax = plt.subplots(figsize=(11, 3.6))
                     im = ax.imshow(grid, aspect="auto", origin="upper",
-                                   cmap="coolwarm", vmin=-1, vmax=2,
+                                   cmap=cmap, norm=norm, extent=extent,
                                    interpolation="nearest")
-                    ax.set_xlabel("station along the scratch (element)")
-                    ax.set_ylabel("depth (element)")
-                    ax.set_title("SDV13 branch: -1 deleted, 0 unset, "
-                                 "1 ductile, 2 brittle  (mid axial lane)")
-                    fig.colorbar(im, ax=ax, shrink=0.9)
+                    ax.set_xlabel("station along the scratch (%s)"
+                                  % ("um" if extent else "element"))
+                    ax.set_ylabel("depth (%s)" % ("um" if extent else "element"))
+                    ax.set_title("%s -- SDV13 ductile/brittle branch, mid axial "
+                                 "lane" % os.path.basename(base))
+                    cb = fig.colorbar(im, ax=ax, ticks=[-1, 0, 1, 2], shrink=0.9)
+                    cb.ax.set_yticklabels(["deleted", "unset", "ductile",
+                                           "brittle"])
+                    # State the sampling bias ON the figure. This is the last
+                    # frame, by which time the elements that went brittle and
+                    # failed have been deleted -- so the surviving brittle count
+                    # is a lower bound, and a reader cannot know that otherwise.
+                    ax.text(0.005, -0.30, "last frame only: elements that went "
+                            "brittle and failed now read 'deleted', so the "
+                            "brittle fraction here is a LOWER bound "
+                            "(REPOST/hotspot.py walks every frame)",
+                            transform=ax.transAxes, fontsize=8, color="#B00020")
                     fig.tight_layout()
-                    fig.savefig(base + "_branch_map.png", dpi=120)
+                    fig.savefig(base + "_branch_map.png", dpi=200)
                     print("wrote      : %s"
                           % os.path.basename(base + "_branch_map.png"))
             if energy and tt is not None:
-                fig, ax = plt.subplots(figsize=(8, 4))
-                for n in ("ALLIE", "ALLKE", "ALLAE", "ALLDMD"):
-                    if n in got:
-                        ax.plot(tt, got[n], label=n)
-                ax.set_xlabel("time (s)")
-                ax.set_ylabel("energy (mJ)")
-                ax.set_title("energy balance")
-                ax.legend()
+                fig, ax = plt.subplots(figsize=(9, 4.6))
+                _c = {"ALLIE": "#0072B2", "ALLKE": "#009E73",
+                      "ALLAE": "#D55E00", "ALLPD": "#CC79A7",
+                      "ALLDMD": "#56B4E9"}
+                for n in ("ALLIE", "ALLKE", "ALLAE", "ALLPD", "ALLDMD"):
+                    if n in got and any(abs(v) > 0 for v in got[n]):
+                        ax.plot([x * 1e6 for x in tt], [abs(v) for v in got[n]],
+                                color=_c.get(n), lw=1.2, label=n)
+                # LOG, because these span five decades: ALLKE/ALLIE has run as
+                # high as 56,000 on this project's own results, and on a linear
+                # axis that is one flat line with everything else at zero -- a
+                # figure that conveys nothing at all.
+                ax.set_yscale("log")
+                ax.set_xlabel("time (us)")
+                ax.set_ylabel("energy (mJ), log scale")
+                ax.set_title("%s -- energy balance" % os.path.basename(base))
+                # The two quality bars, drawn. Both were computed, printed to the
+                # console and then left off the figure, on runs that fail them.
+                _e = out.get("energy") or {}
+                _msg = []
+                if _e.get("artificial_fraction") is not None:
+                    _msg.append("ALLAE/ALLIE = %.0f%% (bar 5%%)"
+                                % (100 * _e["artificial_fraction"]))
+                if _e.get("kinetic_fraction") is not None:
+                    _msg.append("ALLKE/ALLIE = %.3gx (bar 0.1)"
+                                % _e["kinetic_fraction"])
+                if _msg:
+                    _bad = (_e.get("artificial_fraction") or 0) > 0.05
+                    ax.text(0.01, 0.97, "\n".join(_msg), transform=ax.transAxes,
+                            va="top", fontsize=9,
+                            color="#B00020" if _bad else "#666666")
+                ax.legend(ncol=2, fontsize=9)
                 ax.grid(alpha=0.3)
                 fig.tight_layout()
-                fig.savefig(base + "_energy.png", dpi=120)
+                fig.savefig(base + "_energy.png", dpi=200)
                 print("wrote      : %s" % os.path.basename(base + "_energy.png"))
         except ImportError:
-            print("plots      : matplotlib not available in this Abaqus Python - "
-                  "CSVs written instead")
+            # This is the NORMAL path, not an edge case: Abaqus' bundled Python
+            # generally has no matplotlib, which is why no run of this project has
+            # ever produced a PNG from here. Say what to run instead, or the CSVs
+            # sit unplotted and the results get documented by phone photographs.
+            print("plots      : matplotlib not available in this Abaqus Python.")
+            print("             CSVs are written; draw the figures with the host")
+            print("             Python, which does not need Abaqus at all:")
+            print("                 python REPOST/plots.py <dir with the CSVs>")
     finally:
         odb.close()
     return 0

@@ -65,6 +65,12 @@ class DeckParams:
     shell_axial_divisions: int = 6
     shell_radial_divisions: int = 1
     bond_density_kg_m3: float = 2700.0
+    # False leaves the abrasive and the workpiece as the only bodies in the deck.
+    # On a single-grit deck the rim is 96% of the rigid mesh and never touches the
+    # work, so it is contact facets for nothing. The rim's mass and inertia are
+    # kept regardless -- they stand for the spindle, and every reference-node DOF
+    # is velocity-driven anyway.
+    include_bond: bool = True
 
     # ---- grits ----------------------------------------------------------
     grit_mode: str = "concentration"      # 'concentration'|'areal_density'|'count'|'single'
@@ -111,6 +117,12 @@ class DeckParams:
     wp_surface_layer_mm: float = 0.0
     wp_depth_growth: float = 1.3
     wp_max_depth_element_mm: float = 0.0
+    # Graded axial mesh: fine down the groove lane, coarsening to the side faces.
+    # With wp_width_band_mm = 0 the axial mesh is uniform, as before. This is what
+    # lets the axial size come down to the cutting size -- fixing the element aspect
+    # ratio -- without paying for fine columns across a face the groove never sees.
+    wp_width_band_mm: float = 0.0
+    wp_width_growth: float = 1.3
     wp_material: str = "STONE"
     wp_density_kg_m3: float = 2650.0
     wp_youngs_modulus_mpa: float = 50_000.0
@@ -230,6 +242,8 @@ def workpiece_of(p: DeckParams) -> Optional[WorkpieceBlock]:
         surface_layer_mm=p.wp_surface_layer_mm,
         depth_growth=p.wp_depth_growth,
         max_depth_element_mm=p.wp_max_depth_element_mm,
+        width_band_mm=p.wp_width_band_mm,
+        width_growth=p.wp_width_growth,
     )
 
 
@@ -636,7 +650,8 @@ def build_deck(p: DeckParams, solids: Sequence, outdir: str,
         bond_density_kg_m3=p.bond_density_kg_m3,
         engage_window_mm=travel or None, model_name=p.name,
         analysis=an, step_time_s=step_time,
-        surface_speed_mm_s=p.surface_speed_mm_s)
+        surface_speed_mm_s=p.surface_speed_mm_s,
+        include_bond=p.include_bond)
 
     # The depth of cut can only be judged once the grits are placed and the ground
     # face has been seated on the tallest of them. Feeding deeper than the bond
@@ -657,12 +672,20 @@ def build_deck(p: DeckParams, solids: Sequence, outdir: str,
                 "would turn for the whole step without touching. Cut deeper than "
                 "%.3f um, or reduce the standoff (clearance_um)."
                 % (an.depth_of_cut_um, p.clearance_um, floor, floor))
-        if an.depth_of_cut_um >= clr:
+        # Only a bond that is IN the deck can hit the workpiece. With include_bond
+        # off the rim is not written at all, so cutting past the clearance is legal
+        # -- it is still worth saying, because on the bonded twin it would abort.
+        if an.depth_of_cut_um >= clr and p.include_bond:
             raise DeckError(
                 "depth of cut %.3f um exceeds the bond-rim clearance %.3f um for this "
                 "wheel, so the bond would hit the workpiece. Use at most %.3f um, or "
                 "raise the grit protrusion."
                 % (an.depth_of_cut_um, clr, 0.85 * clr))
+        if an.depth_of_cut_um >= clr and not p.include_bond:
+            notes.append(
+                "depth of cut %.3f um is past the %.3f um bond clearance; legal only "
+                "because include_bond=False leaves no rim to strike the work"
+                % (an.depth_of_cut_um, clr))
         if an.depth_of_cut_um < 0.2 * clr:
             notes.append(
                 "depth of cut %.3f um is only %.0f%% of the %.3f um clearance; few "
@@ -678,7 +701,7 @@ def build_deck(p: DeckParams, solids: Sequence, outdir: str,
             wp_position=p.wp_position, wp_position_deg=p.wp_position_deg,
             bond_density_kg_m3=p.bond_density_kg_m3,
             engage_window_mm=travel or None, model_name=p.name + "_cae",
-            analysis=None)
+            analysis=None, include_bond=p.include_bond)
         info["cae_deck"] = cae_inp
         # Each deck needs its own report: the verifiers cross-check the file against
         # it, and size_bytes alone differs between the twin and the run-ready deck.

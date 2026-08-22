@@ -167,17 +167,35 @@ def write_arms(deck_in: str, outdir: str, *,
         job = name
         dst = os.path.join(folder, job + ".inp")
         info = set_h_source(deck_in, dst, h)
-        line = ("abaqus job=%s input=%s user=%s double=both cpus=%d interactive"
-                % (job, os.path.basename(dst), info["subroutine"], cores))
+        base = ("abaqus job=%s input=%s user=%s double=both"
+                % (job, os.path.basename(dst), info["subroutine"]))
+        line = base + " cpus=%d interactive" % cores
+        # datacheck is serial work: cpus=1 needs 5 licence tokens against the 12
+        # that cpus=8 reserves, and it is not a second faster for spending them.
+        check = base + " cpus=1 datacheck"
         with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
-            fh.write("@echo off\r\nabaqus verify -user_explicit\r\n")
-            fh.write(line.replace(" interactive", " datacheck") + "\r\n")
+            fh.write("@echo off\r\ncd /d \"%~dp0\"\r\n")
+            fh.write("abaqus verify -user_explicit\r\n")
+            fh.write(check + "\r\n")
+            fh.write("if errorlevel 1 exit /b 1\r\n")
             fh.write(line + "\r\n")
         with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
-            fh.write("#!/bin/sh\nabaqus verify -user_explicit\n")
-            fh.write(line.replace(" interactive", " datacheck") + "\n")
+            fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
+            fh.write("abaqus verify -user_explicit\n")
+            fh.write(check + "\n")
             fh.write(line + "\n")
+        # The arms are the comparison the whole model rests on, and until now they
+        # were the only decks shipped with no way to read their .odb -- the README
+        # documented a post step that did not exist here.
+        from semgrit.odbpost import write_odb_postprocess_script
+        write_odb_postprocess_script(
+            os.path.join(folder, job + "_postprocess_odb.py"))
+        info["size_bytes"] = os.path.getsize(dst)
         info["command"] = line
+        # The folder is NUMBERED ("3_forced_brittle"), not bare. The README was
+        # generated from the arm name alone, so its copy-paste block cd'd into
+        # directories that do not exist.
+        info["folder"] = os.path.basename(folder)
         made[name] = info
     return made
 

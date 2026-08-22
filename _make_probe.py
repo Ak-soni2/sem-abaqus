@@ -219,18 +219,27 @@ def write_probe(folder: str, props, depvar, delete_sdv, dc_mm, material,
         w("*End Step\n")
 
     # ---- how to run it, and what to accept -------------------------------
+    # The subroutine has to sit BESIDE the deck: Abaqus resolves user= against
+    # the working directory, so a probe folder without it aborts at compile --
+    # and the probe is the gate that proves the field variable reaches the
+    # material points at all, so it failing silently costs two 5 h runs.
+    shutil.copy(os.path.join(HERE, "vumat_grind.for"), folder)
+
     line = ("abaqus job=probe input=probe.inp user=vumat_grind.for "
             "double=both cpus=1")
     with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
         fh.write("@echo off\r\n")
+        fh.write("cd /d \"%~dp0\"\r\n")
         fh.write("rem Step 0: does the Fortran toolchain work at all?\r\n")
         fh.write("abaqus verify -user_explicit\r\n")
         fh.write("rem Step 1: preprocessing only. Seconds. Reads the card.\r\n")
         fh.write(line + " datacheck\r\n")
+        fh.write("if errorlevel 1 exit /b 1\r\n")
         fh.write("rem Step 2: solve it.\r\n")
         fh.write(line + " interactive\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
-        fh.write("#!/bin/sh\nabaqus verify -user_explicit\n")
+        fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
+        fh.write("abaqus verify -user_explicit\n")
         fh.write(line + " datacheck\n" + line + " interactive\n")
 
     exp = ["# What to accept", "",

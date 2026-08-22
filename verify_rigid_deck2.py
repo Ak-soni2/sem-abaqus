@@ -79,6 +79,11 @@ SPEC = {
     'surface interaction': ({MODEL}, ()),
     'friction': ({MODEL}, (1,)),
     'boundary': ({MODEL, STEP}, None),
+    # How the swept chip thickness reaches the material points on the multi and
+    # energy decks: '<instance>.<element>, <h>'. It was missing from this table, so
+    # the gate condemned the two decks carrying the novel physics as containing an
+    # unrecognised keyword -- the verifier was wrong, not the deck.
+    'initial conditions': ({MODEL}, (2,)),
     'step': ({MODEL}, ()),
     'end step': ({STEP}, ()),
     'dynamic': ({STEP}, (2,)),             # ", <time>" -> two fields
@@ -319,11 +324,17 @@ else:
         'workpiece elements' not in hdr, 'header has no workpiece line')
 _sh = np.array([W['nodes'][n] for e, c in W['els'].items() if W['ty'][e] == 'R3D4'
                 for n in c])
-chk('header outer radius matches the bond shell geometry',
-    abs(float(hdr['wheel outer radius (mm)'].split()[0])
-        - float(np.hypot(_sh[:, 0], _sh[:, 1]).max())) < 1e-9,
-    'header %s, shell max radius %.9f mm'
-    % (hdr['wheel outer radius (mm)'], np.hypot(_sh[:, 0], _sh[:, 1]).max()))
+if len(_sh):
+    chk('header outer radius matches the bond shell geometry',
+        abs(float(hdr['wheel outer radius (mm)'].split()[0])
+            - float(np.hypot(_sh[:, 0], _sh[:, 1]).max())) < 1e-9,
+        'header %s, shell max radius %.9f mm'
+        % (hdr['wheel outer radius (mm)'], np.hypot(_sh[:, 0], _sh[:, 1]).max()))
+else:
+    # include_bond=False: there is no shell to match the header against. Say so
+    # rather than pass -- the radius claim simply has no witness in this file.
+    print('  [skip] header outer radius vs bond shell: no R3D4 shell '
+          '(include_bond=False)')
 
 rep = json.load(open(RPT)) if os.path.exists(RPT) else {}
 if rep:
@@ -350,22 +361,41 @@ print('Q4  PHYSICS  (re-derived independently)')
 shell_ids = sorted(set(n for e, c in W['els'].items() if W['ty'][e] == 'R3D4'
                        for n in c))
 S = np.array([W['nodes'][n] for n in shell_ids])
-rr_s = np.hypot(S[:, 0], S[:, 1])
-R_out, R_in = float(rr_s.max()), float(rr_s.min())
-half_w = float(np.abs(S[:, 2]).max())
-ths = np.arctan2(S[:, 1], S[:, 0])
-# A full wheel wraps: its last node column IS the first, so the gap across theta=+-pi
-# equals the ordinary node spacing. On a sector that gap is the whole missing angle.
-_u = np.unique(np.round(ths, 12))
-_sp = float(np.median(np.diff(_u))) if len(_u) > 2 else 0.0
-FULL = len(_u) > 2 and (2 * math.pi - (float(_u[-1]) - float(_u[0]))) <= 1.5 * _sp
-dth = 2 * math.pi if FULL else float(ths.max() - ths.min())
-print('      shell: %d nodes, r %.6f..%.6f mm, %.6f rad%s, half-width %.6f mm'
-      % (len(S), R_in, R_out, dth, '  (FULL WHEEL)' if FULL else '', half_w))
+_prm = (json.load(open(RPT)).get('params', {}) if os.path.exists(RPT) else {})
+if len(S):
+    rr_s = np.hypot(S[:, 0], S[:, 1])
+    R_out, R_in = float(rr_s.max()), float(rr_s.min())
+    half_w = float(np.abs(S[:, 2]).max())
+    ths = np.arctan2(S[:, 1], S[:, 0])
+    # A full wheel wraps: its last node column IS the first, so the gap across
+    # theta=+-pi equals the ordinary node spacing. On a sector that gap is the
+    # whole missing angle.
+    _u = np.unique(np.round(ths, 12))
+    _sp = float(np.median(np.diff(_u))) if len(_u) > 2 else 0.0
+    FULL = len(_u) > 2 and (2 * math.pi - (float(_u[-1]) - float(_u[0]))) <= 1.5 * _sp
+    dth = 2 * math.pi if FULL else float(ths.max() - ths.min())
+    th_lo = float(ths.min())
+    print('      shell: %d nodes, r %.6f..%.6f mm, %.6f rad%s, half-width %.6f mm'
+          % (len(S), R_in, R_out, dth, '  (FULL WHEEL)' if FULL else '', half_w))
+else:
+    # include_bond=False still writes the RIM's mass and inertia -- they stand for
+    # the spindle. So the integration is still the right check; its domain just has
+    # to come from the report rather than from shell nodes that were not written.
+    R_out = float(_prm.get('diameter_mm', 50.0)) / 2.0
+    R_in = R_out - float(_prm.get('rim_depth_mm', 0.012))
+    half_w = float(_prm.get('width_mm', 0.030)) / 2.0
+    dth = math.radians(float(json.load(open(RPT)).get('resolved_sector_deg', 0.0)
+                             if os.path.exists(RPT) else 0.0))
+    FULL = dth >= 2 * math.pi - 1e-9
+    th_lo = 0.0
+    print('      no bond shell (include_bond=False): rim domain taken from the '
+          'report')
+    print('      rim: r %.6f..%.6f mm, %.6f rad, half-width %.6f mm'
+          % (R_in, R_out, dth, half_w))
 
 nr, nt, nz = 60, 400, 20
 r_c = R_in + (np.arange(nr) + 0.5) * (R_out - R_in) / nr
-t_c = ths.min() + (np.arange(nt) + 0.5) * dth / nt
+t_c = th_lo + (np.arange(nt) + 0.5) * dth / nt
 z_c = -half_w + (np.arange(nz) + 0.5) * (2 * half_w) / nz
 dV = ((R_out - R_in) / nr) * (dth / nt) * (2 * half_w / nz)
 Rg, Tg, Zg = np.meshgrid(r_c, t_c, z_c, indexing='ij')

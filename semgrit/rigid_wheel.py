@@ -462,16 +462,31 @@ def write_rigid_wheel_inp(
     analysis=None,
     step_time_s: float = 0.0,
     surface_speed_mm_s: float = 30_000.0,
+    include_bond: bool = True,
 ) -> dict:
-    """Write the all-rigid-wheel geometry deck. Returns a summary dict."""
+    """Write the all-rigid-wheel geometry deck. Returns a summary dict.
+
+    ``include_bond=False`` omits the bond rim shell, leaving the abrasive and the
+    workpiece as the only bodies in the deck. On a single-grit deck the rim is
+    2,812 of 2,928 rigid facets and never reaches the work -- the grit protrudes
+    past it -- so it is 96% of the wheel mesh contributing nothing but general-
+    contact facets to search. The rim's mass and inertia are KEPT either way:
+    they stand for the spindle the grit is attached to, every reference-node DOF
+    is velocity-driven regardless, and the tensor has to stay positive definite.
+    """
     if not model.placements:
         raise ValueError("the wheel model has no grits placed")
     wp = workpiece
     spec = model.spec
     R = spec.outer_radius_mm
 
-    shell_nodes, shell_quads, shell_groups = build_rim_shell(spec)
-    shell_nodes = quantise(shell_nodes)
+    if include_bond:
+        shell_nodes, shell_quads, shell_groups = build_rim_shell(spec)
+        shell_nodes = quantise(shell_nodes)
+    else:
+        shell_nodes = np.zeros((0, 3), dtype=float)
+        shell_quads = []
+        shell_groups = {name: [] for name in _SHELL_GROUPS}
 
     motion = None
     hybrid_info = None
@@ -544,9 +559,14 @@ def write_rigid_wheel_inp(
               "no output.\n")
         w("** Units: mm, tonne, s, MPa, N.   Wheel axis = Z.\n")
         w("**\n")
-        w("** WHEEL      : ONE discrete rigid body -- bond rim shell (R3D4) plus every\n")
-        w("**              grit facet (R3D3), all tied to reference node %d at the\n"
-          % ref_node)
+        if include_bond:
+            w("** WHEEL      : ONE discrete rigid body -- bond rim shell (R3D4) plus every\n")
+            w("**              grit facet (R3D3), all tied to reference node %d at the\n"
+              % ref_node)
+        else:
+            w("** ABRASIVE   : ONE discrete rigid body -- grit facets (R3D3) ONLY, no bond\n")
+            w("**              rim. The abrasive and the workpiece are the only bodies in\n")
+            w("**              this deck. Tied to reference node %d at the\n" % ref_node)
         w("**              origin on the wheel axis. Rotate the wheel with a single BC\n")
         # This line used to read "VR3 = -omega for +X-to-+Y travel", which is backwards:
         # a positive rotation about +Z carries +X toward +Y, so +X-to-+Y travel is
@@ -618,9 +638,11 @@ def write_rigid_wheel_inp(
                 w(_node_line(b + j, p))
         w("%d, 0., 0., 0.\n" % ref_node)
 
-        w("*Element, type=R3D4\n")
-        for e, q in enumerate(shell_quads, start=1):
-            w("%d, %d, %d, %d, %d\n" % (e, q[0] + 1, q[1] + 1, q[2] + 1, q[3] + 1))
+        if len(shell_quads):
+            w("*Element, type=R3D4\n")
+            for e, q in enumerate(shell_quads, start=1):
+                w("%d, %d, %d, %d, %d\n"
+                  % (e, q[0] + 1, q[1] + 1, q[2] + 1, q[3] + 1))
         w("*Element, type=R3D3\n")
         eid = n_shell_els
         grit_el_first: list[int] = []
@@ -661,7 +683,9 @@ def write_rigid_wheel_inp(
         w("*Nset, nset=WHEEL_REF\n%d,\n" % ref_node)
         w("*Rigid Body, ref node=WHEEL_REF, elset=ES_WHEEL_ALL\n")
         w("*Surface, type=ELEMENT, name=WHEEL_SURF\n")
-        w("ES_GRITS, SPOS\nES_BOND_OUTER, SPOS\n")
+        w("ES_GRITS, SPOS\n")
+        if shell_groups.get("OUTER"):
+            w("ES_BOND_OUTER, SPOS\n")
         w("*Surface, type=ELEMENT, name=GRITS_SURF\nES_GRITS, SPOS\n")
         w("*End Part\n")
 
@@ -714,7 +738,9 @@ def write_rigid_wheel_inp(
         # "The following sets were not found when generating the surface ..." and
         # aborts the import.
         w("*Surface, type=ELEMENT, name=A_WHEEL_SURF\n")
-        w("WHEEL-1.ES_GRITS, SPOS\nWHEEL-1.ES_BOND_OUTER, SPOS\n")
+        w("WHEEL-1.ES_GRITS, SPOS\n")
+        if shell_groups.get("OUTER"):
+            w("WHEEL-1.ES_BOND_OUTER, SPOS\n")
         w("*Surface, type=ELEMENT, name=A_GRITS_SURF\nWHEEL-1.ES_GRITS, SPOS\n")
         if engage and len(engage) < len(faces):
             w("*Surface, type=ELEMENT, name=A_GRITS_ENGAGE_SURF\n")

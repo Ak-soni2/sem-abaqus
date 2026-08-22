@@ -47,13 +47,26 @@ BUILD = os.path.join(HERE, "_runbuild")
 # MATERIAL_SETUP below along with the sweep it came from.
 #
 # Resolving a sub-micron cut needs a surface layer far finer than the 0.3 um the
-# other decks use, so the depth is GRADED: 0.03 um elements for the first
-# 0.45 um, then growing at 1.45 into the body. dt follows the smallest element
-# and would have paid for that layer anyway; the grading is what stops the
-# coarse body below costing 150 layers of elements.
+# other decks use, so the depth is GRADED: fine elements at the face, then growing
+# at 1.45 into the body. dt follows the smallest element and would have paid for
+# that layer anyway; the grading is what stops the coarse body below costing 150
+# layers of elements.
 #
-# Axially 1.5 um: the stable increment already follows the 0.03 um depth
-# element, so a fine axial mesh would buy nothing and cost elements.
+# THE DEPTH ELEMENT IS DERIVED FROM dc, PER MATERIAL, and that is the whole point
+# of ELEMENTS_PER_DC. It used to be a flat 0.03 um for both materials, which is
+# 2.9 elements through sandstone's dc and 1.76 through SiC's -- the SiC mesh had
+# been sized for sandstone's dc and never revisited, so the ductile/brittle
+# transition the model exists to resolve was spanned by less than two elements.
+# The transition cannot be located to better than the element that straddles it.
+#
+# Axially 0.15 um in the groove lane, not the old flat 1.5 um. The old value came
+# from "the stable increment already follows the depth element, so a fine axial
+# mesh buys nothing" -- true about dt, and wrong about the mesh: 1.5 um against a
+# 0.03 um depth element is an aspect ratio of 51:1, and a C3D8R that far from
+# cubic integrates a bending-dominated chip badly no matter what dt is. What
+# makes it affordable is grading the WIDTH too (width_band_mm): the groove is a
+# few microns wide in a 20 um block, so only the lane needs the fine columns and
+# the edges coarsen away at 1.35. Aspect ratio comes to ~9:1 sandstone, ~14:1 SiC.
 #
 # protrusion_std 0.015 is a well-dressed wheel -- grits at nearly one height.
 # Without it only the tallest grit reaches the work at 0.4 um of infeed and the
@@ -66,11 +79,25 @@ BUILD = os.path.join(HERE, "_runbuild")
 ARC_WINDOW_MM = 0.1
 GRIT_COUNT = 12
 DC_FORM = 2
-ELEMENT_UM = 0.30
-ELEMENT_AXIAL_UM = 1.5
-ELEMENT_DEPTH_UM = 0.03
-SURFACE_LAYER_UM = 0.45
+ELEMENT_UM = 0.15
+ELEMENT_AXIAL_UM = 0.15
+# How many elements must span the critical depth of cut. Five is the smallest
+# number that puts an element wholly inside the ductile zone, one wholly outside
+# and one straddling; below about four the transition is an artefact of where the
+# element boundary happens to fall. The depth element follows from it and from the
+# material's own dc, so a new material is sized correctly without editing this.
+ELEMENTS_PER_DC = 5.0
+SURFACE_LAYER_UM = 0.35
 DEPTH_GROWTH = 1.45
+# The fine axial lane, centred on the groove. 6 um holds the widest measured grain
+# (13.2 um across) at the depth it actually cuts, plus the plastic zone beside it.
+WIDTH_BAND_UM = 6.0
+WIDTH_GROWTH = 1.35
+
+
+def element_depth_um(mat) -> float:
+    """The depth element that puts ELEMENTS_PER_DC elements across dc."""
+    return mat.dc_nm(DC_FORM) / 1000.0 / ELEMENTS_PER_DC
 PROTRUSION_STD = 0.015
 # 20 um, not 9. A 9 um block is 0.68 of ONE grain diameter (the largest measured
 # grain is 13.2 um across), so grains overhang it and the groove is an edge
@@ -193,15 +220,22 @@ def command_file(folder, job, deck, subroutine, cores=8):
         "at cpus=1. Every wall clock in the README is the %d-core figure."
         % cores,
     ]
+    # cd to the script's own folder: Abaqus resolves input= and user= against the
+    # working directory, so RUN_ME\1_single_abrasive\run.bat invoked from the repo
+    # root would otherwise look for the deck and the .for in the root and abort.
+    # And stop on a failed datacheck -- without the guard a deck that died at
+    # preprocessing still fires the solve line and burns the licence tokens.
     with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
         fh.write("@echo off\r\n")
+        fh.write("cd /d \"%~dp0\"\r\n")
         for ln in rem:
             fh.write(("rem  " + ln).rstrip() + "\r\n")
         fh.write("abaqus verify -user_explicit\r\n")
         fh.write(base + " cpus=1 datacheck\r\n")
+        fh.write("if errorlevel 1 exit /b 1\r\n")
         fh.write(line + "\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
-        fh.write("#!/bin/sh\n")
+        fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
         for ln in rem:
             fh.write(("#  " + ln).rstrip() + "\n")
         fh.write("abaqus verify -user_explicit\n")
@@ -261,10 +295,16 @@ def main(material: str = "sandstone") -> int:
         wp_width_mm=WP_WIDTH_MM,
         wp_element_size_mm=ELEMENT_UM / 1000.0,
         wp_element_size_width_mm=ELEMENT_AXIAL_UM / 1000.0,
-        wp_element_size_depth_mm=ELEMENT_DEPTH_UM / 1000.0,
+        wp_element_size_depth_mm=element_depth_um(mat) / 1000.0,
         wp_surface_layer_mm=SURFACE_LAYER_UM / 1000.0,
-        wp_depth_growth=DEPTH_GROWTH, protrusion_std=PROTRUSION_STD)
+        wp_depth_growth=DEPTH_GROWTH,
+        wp_width_band_mm=WIDTH_BAND_UM / 1000.0,
+        wp_width_growth=WIDTH_GROWTH, protrusion_std=PROTRUSION_STD)
     p1.analysis.depth_of_cut_um = depth_of_cut_um
+    # "Single abrasive" now means what it says: one grit and the workpiece, with no
+    # bond rim. The rim was 2,812 of 2,928 rigid facets, all of them in general
+    # contact, and it never reaches the work -- the grit stands 3.6 um proud of it.
+    p1.include_bond = False
     # Moves the JH-2 card, its density and the *Material name together. Setting
     # only the hybrid params above would leave the brittle branch on sandstone.
     materials.apply(p1, material)
@@ -314,9 +354,11 @@ def main(material: str = "sandstone") -> int:
                      hybrid=hp2, depth_of_cut_um=depth_of_cut_um,
                      wp_width_mm=WP_WIDTH_MM, element_um=ELEMENT_UM,
                      element_axial_um=ELEMENT_AXIAL_UM,
-                     element_depth_um=ELEMENT_DEPTH_UM,
+                     element_depth_um=element_depth_um(mat),
                      surface_layer_um=SURFACE_LAYER_UM,
                      depth_growth=DEPTH_GROWTH,
+                     width_band_um=WIDTH_BAND_UM,
+                     width_growth=WIDTH_GROWTH,
                      protrusion_std=PROTRUSION_STD)
     d2 = os.path.join(build, "many")
     i2 = build_multi(mp, solids, d2, log=lambda *a: None)
@@ -397,10 +439,21 @@ def main(material: str = "sandstone") -> int:
     for src in (os.path.join(d2, "multi_abrasive_field_report.json"),
                 os.path.join(d2, "multi_abrasive_postprocess_odb.py")):
         if os.path.exists(src):
-            shutil.copy(src, os.path.join(
+            dst_ = os.path.join(
                 f3, os.path.basename(src).replace("multi_abrasive_field",
                                                   "energy_criterion")
-                .replace("multi_abrasive", "energy_criterion")))
+                .replace("multi_abrasive", "energy_criterion"))
+            shutil.copy(src, dst_)
+            if dst_.endswith("_report.json"):
+                # Same re-stamp as the ablation arms: the energy deck is the
+                # multi deck with PROPS(56)/(58) rewritten, so it is a different
+                # size and the copied report described the wrong file.
+                with open(dst_) as fh:
+                    _rep = json.load(fh)
+                _rep["size_bytes"] = inf["size_bytes"]
+                _rep["path"] = e_deck
+                with open(dst_, "w") as fh:
+                    json.dump(_rep, fh, indent=2, default=str)
     ok = (run([sys.executable, "verify_vumat_grind2.py"],
               "verify_vumat_grind2") and
           run([sys.executable, "verify_hybrid_deck.py", e_deck],
@@ -431,9 +484,20 @@ def main(material: str = "sandstone") -> int:
                     os.path.dirname(a["path"]))
         rep_src = os.path.join(d2, "multi_abrasive_field_report.json")
         if os.path.exists(rep_src):
-            shutil.copy(rep_src, os.path.join(
-                os.path.dirname(a["path"]),
-                os.path.basename(a["path"]).replace(".inp", "_report.json")))
+            # Copy the multi report, but re-stamp the fields that are about THIS
+            # file. An arm differs from the multi deck by the PROPS(56) token, so
+            # a verbatim copy carries the wrong size and path, and
+            # verify_rigid_deck2's "report matches the file on disk" check --
+            # correctly -- fails on it.
+            with open(rep_src) as fh:
+                _rep = json.load(fh)
+            _rep["size_bytes"] = a["size_bytes"]
+            _rep["path"] = a["path"]
+            with open(os.path.join(
+                    os.path.dirname(a["path"]),
+                    os.path.basename(a["path"]).replace(
+                        ".inp", "_report.json")), "w") as fh:
+                json.dump(_rep, fh, indent=2, default=str)
         print("   %-18s h_source %d -> %d, %.1f MB"
               % (name, a["h_source_was"], a["h_source"],
                  a["size_bytes"] / 1e6))
@@ -445,7 +509,8 @@ def main(material: str = "sandstone") -> int:
         return 1
     manifest["4_ablation"] = {
         name: dict(command=a["command"], h_source=a["h_source"],
-                   subroutine=a["subroutine"], why=a["why"])
+                   subroutine=a["subroutine"], why=a["why"],
+                   folder=a.get("folder", name))
         for name, a in sorted(arms.items())}
     manifest["4_ablation"]["_what"] = (
         "The same deck as 2_multi_abrasive with PROPS(56) changed and nothing "
@@ -523,7 +588,8 @@ def _readme(out, man, mat, ae_um, est_hours=0.0):
             a(man[k]["command"])
         else:
             for sub in sorted(x for x in man[k] if not x.startswith("_")):
-                a("cd %s && %s && cd .." % (sub, man[k][sub]["command"]))
+                a("cd %s && %s && cd .."
+                  % (man[k][sub].get("folder", sub), man[k][sub]["command"]))
         a("")
     a("```")
     a("")
@@ -552,6 +618,20 @@ def _readme(out, man, mat, ae_um, est_hours=0.0):
     a("```")
     a("abaqus python <name>_postprocess_odb.py <job>.odb")
     a("```")
+    a("")
+    a("That writes the CSVs and the summary JSON. It also tries to draw the")
+    a("figures, but **Abaqus' bundled Python usually has no matplotlib**, so in")
+    a("practice it writes data and no pictures -- which is why the first six runs")
+    a("of this project ended up documented by photographs of a screen. Draw them")
+    a("with the host Python instead, which needs no Abaqus and no re-run:")
+    a("")
+    a("```")
+    a("python REPOST/plots.py <folder holding the CSVs>")
+    a("```")
+    a("")
+    a("It also writes `compare_all.png` across every job it finds, and marks on")
+    a("the figures anything that should stop a number being quoted -- artificial")
+    a("energy over 5% of internal, and byte-identical duplicate datasets.")
     a("")
     a("## What the three should show")
     a("")
@@ -611,9 +691,11 @@ def _sweep_depth_of_cut(material="sandstone", values=None):
                          depth_of_cut_um=ae, wp_width_mm=WP_WIDTH_MM,
                          element_um=ELEMENT_UM,
                          element_axial_um=ELEMENT_AXIAL_UM,
-                         element_depth_um=ELEMENT_DEPTH_UM,
+                         element_depth_um=element_depth_um(mat),
                          surface_layer_um=SURFACE_LAYER_UM,
                          depth_growth=DEPTH_GROWTH,
+                         width_band_um=WIDTH_BAND_UM,
+                         width_growth=WIDTH_GROWTH,
                          protrusion_std=PROTRUSION_STD)
         sp = plan_multi(mp, solids, log=lambda *a: None)["split"]
         n = max(sp["n_cut"], 1)

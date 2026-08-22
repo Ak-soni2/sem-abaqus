@@ -79,6 +79,11 @@ class MultiParams:
     surface_layer_um: float = 0.0
     depth_growth: float = 1.3
     max_depth_element_um: float = 0.0
+    # Graded axial mesh, same idea across the face. Without it the axial size has to
+    # stay coarse to be affordable, and a coarse axial size against a fine depth
+    # element is what produced the 51:1 element the shipped decks carried.
+    width_band_um: float = 0.0
+    width_growth: float = 1.3
     protrusion_std: float = 0.12
     """Spread of grit protrusion. Small values mean a well-dressed wheel where
     many grits stand at nearly the same height -- which is what lets SEVERAL of
@@ -138,6 +143,8 @@ class MultiParams:
             wp_surface_layer_mm=self.surface_layer_um / 1000.0,
             wp_depth_growth=self.depth_growth,
             wp_max_depth_element_mm=self.max_depth_element_um / 1000.0,
+            wp_width_band_mm=self.width_band_um / 1000.0,
+            wp_width_growth=self.width_growth,
             protrusion_std=self.protrusion_std,
             clearance_um=self.standoff_um, wp_position=self.wp_position,
             surface_speed_mm_s=self.surface_speed_m_s * 1000.0,

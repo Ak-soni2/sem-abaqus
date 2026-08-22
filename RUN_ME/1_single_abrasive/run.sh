@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e
+cd "$(dirname "$0")"
 #  Submit this deck. THREE steps, in order.
 #
 #    0. abaqus verify -user_explicit

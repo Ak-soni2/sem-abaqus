@@ -323,128 +323,140 @@ print('P4  GEOMETRY  (re-derived from the node coordinates)')
 shell_e = {e: c for e, c in W['els'].items() if W['ty'][e] == 'R3D4'}
 grit_e = {e: c for e, c in W['els'].items() if W['ty'][e] == 'R3D3'}
 sh_nodes = sorted(set(n for c in shell_e.values() for n in c))
-P = np.array([W['nodes'][i] for i in sh_nodes])
-rr = np.hypot(P[:, 0], P[:, 1])
-# Cluster with a tolerance rather than exact equality: the coordinates in the file are
-# quantised by the write format, so a node on a circle of radius 25 recovers that
-# radius only to within the quantum, not to the last bit.
-TOL_R = 1e-9
-srt = np.sort(rr)
-radii = [float(srt[0])]
-for x in srt[1:]:
-    if x - radii[-1] > TOL_R:
-        radii.append(float(x))
-# A thin shell has two radial levels; a deep wedge subdivided radially has one per
-# division, and its axial and cut faces legitimately carry the intermediate ones. What
-# must hold either way is that every node sits on one of a few *exact* circles, so the
-# outer face is a true arc and not a faceted polygon.
-R_out, R_in = max(radii), min(radii)
-chk('bond shell nodes lie on a few exact circles (true arc, not faceted)',
-    2 <= len(radii) <= 64, '%d radial levels (tol %.0e): %.6f .. %.6f mm'
-    % (len(radii), TOL_R, R_in, R_out))
-lev = np.array(radii)
-dev = float(np.abs(lev[np.abs(rr[:, None] - lev[None, :]).argmin(axis=1)] - rr).max())
-chk('shell node radii deviate from those exact circles by < 1 pm', dev < 1e-9,
-    'max deviation %.3e mm across %d levels' % (dev, len(radii)))
-n_out = int((np.abs(rr - R_out) < TOL_R).sum())
-chk('the outer face is a full exact circle at the largest radius', n_out > 0,
-    '%d nodes on r = %.6f mm' % (n_out, R_out))
-# A full wheel is identified from the mesh, not from the report: it is the only case
-# with no sector cut faces, because the last column of nodes is the first.
-FULL = 'ES_BOND_SECTOR_START' not in W['elsets']
-th = np.degrees(np.arctan2(P[:, 1], P[:, 0]))
-rim = R_out - R_in
-if FULL:
-    span = 360.0
-    arc = 2.0 * math.pi * R_out
-    sag = None
-    print('      R = %.6f mm, FULL WHEEL, circumference %.6f mm, rim %.6f mm'
-          % (R_out, arc, rim))
-    # Cluster before differencing: every angular station carries many nodes (one per
-    # radius and axial station) whose recovered angles differ in the last bits, so a
-    # raw diff is mostly ~1e-14 noise and its median is meaningless.
-    uth = np.sort(th)
-    keep = np.r_[True, np.diff(uth) > 1e-7]
-    uth = uth[keep]
-    # Include the wrap across +-180 deg: that gap is the seam, if there is one.
-    gaps = np.r_[np.diff(uth), 360.0 - (uth[-1] - uth[0])]
-    chk('full wheel closes without a seam',
-        float(gaps.max()) <= 1.5 * float(np.median(gaps)) + 1e-9,
-        '%d angular stations, largest gap %.6f deg vs median %.6f'
-        % (len(uth), gaps.max(), np.median(gaps)))
-else:
-    span = float(th.max() - th.min())
-    arc = R_out * math.radians(span)
-    sag = arc * arc / (8.0 * R_out)
-    print('      R = %.6f mm, sector %.6f deg, arc %.6f mm, rim %.6f mm'
-          % (R_out, span, arc, rim))
-    print('      sagitta %.3f um = %.0f%% of the rim depth'
-          % (sag * 1000, 100 * sag / rim))
-chk('sector agrees with the report', ('resolved_sector_deg' not in REPORT)
-    or abs(span - float(REPORT['resolved_sector_deg'])) < 1e-6,
-    '%.6f deg in the mesh' % span)
-chk('arc length agrees with the report', ('arc_length_mm' not in REPORT)
-    or abs(arc - float(REPORT['arc_length_mm'])) < 1e-6, '%.6f mm' % arc)
-if sag is not None:
-    # Not a correctness property -- a flat-looking sector is still a correct sector.
-    # It is flagged because "it renders as a rectangle" is the usual complaint.
-    #
-    # Two independent ways for a sector to read as an arc, and either suffices:
-    #  * a thin rim, where the outer face visibly bows across the band (sagitta > rim);
-    #  * a wide angle, where the two radial cut faces obviously converge. Past about
-    #    10 deg that convergence carries the shape on its own, and demanding
-    #    sagitta > rim there would wrongly condemn a deep chunky wedge -- exactly the
-    #    geometry that looks most like a slice of a real wheel.
-    bows = sag > rim
-    wide = span >= 10.0
-    warn('sector reads as an arc rather than a rectangle', bows or wide,
-         'sector %.3f deg, sagitta %.3f um vs rim %.3f um; widen the angle, lengthen '
-         'the arc, shrink the radius or thin the rim'
-         % (span, sag * 1000, rim * 1000))
-    print('      reads as an arc because %s'
-          % (' and '.join(filter(None, [
-              'the outer face bows %.2fx its rim depth' % (sag / rim) if bows else '',
-              'the cut faces converge at %.1f deg' % span if wide else '']))
-             or 'NOTHING -- it will look flat'))
 
-# --- every shell quad normal must point out of the sector -------------------
-zmax = float(P[:, 2].max())
-zmin = float(P[:, 2].min())
-th0, th1 = math.radians(float(th.min())), math.radians(float(th.max()))
-badn = []
-for e, cc in shell_e.items():
-    q = np.array([W['nodes'][i] for i in cc])
-    n = np.cross(q[1] - q[0], q[2] - q[0])
-    n = n / max(float(np.linalg.norm(n)), 1e-30)
-    m = q.mean(axis=0)
-    rm = float(np.hypot(m[0], m[1]))
-    er = np.array([m[0] / rm, m[1] / rm, 0.0])
-    et = np.array([-m[1] / rm, m[0] / rm, 0.0])
-    # Classify by the quad's four *nodes*, not its centroid. A quad spanning an arc
-    # has its centroid on the chord, 5e-7 mm inside the circle here, so a
-    # centroid-radius test with a quantum-sized tolerance rejects every face on the
-    # cylinder. The nodes themselves lie on the circle exactly.
-    nr = np.hypot(q[:, 0], q[:, 1])
-    nth = np.arctan2(q[:, 1], q[:, 0])
-    if np.all(np.abs(nr - R_out) < 1e-9):
-        want = er
-    elif np.all(np.abs(nr - R_in) < 1e-9):
-        want = -er
-    elif np.all(np.abs(q[:, 2] - zmin) < 1e-9):
-        want = np.array([0.0, 0.0, -1.0])
-    elif np.all(np.abs(q[:, 2] - zmax) < 1e-9):
-        want = np.array([0.0, 0.0, 1.0])
-    elif np.all(np.abs(nth - th0) < 1e-9):
-        want = -et
-    elif np.all(np.abs(nth - th1) < 1e-9):
-        want = et
+# An include_bond=False deck has no rim, so every check below that re-derives the
+# wheel from bond-shell nodes has nothing to read. Skipping is stated out loud
+# rather than passed silently: a gate that reports PASS on a file it never looked
+# at is worse than one that says it did not look.
+BONDLESS = not shell_e
+if BONDLESS:
+    print('      no R3D4 bond shell in this deck (include_bond=False):')
+    print('      skipping the rim geometry, sector and shell-normal checks.')
+    chk('bondless deck still carries grit facets', bool(grit_e),
+        '%d R3D3 facets' % len(grit_e))
+else:
+    P = np.array([W['nodes'][i] for i in sh_nodes])
+    rr = np.hypot(P[:, 0], P[:, 1])
+    # Cluster with a tolerance rather than exact equality: the coordinates in the file are
+    # quantised by the write format, so a node on a circle of radius 25 recovers that
+    # radius only to within the quantum, not to the last bit.
+    TOL_R = 1e-9
+    srt = np.sort(rr)
+    radii = [float(srt[0])]
+    for x in srt[1:]:
+        if x - radii[-1] > TOL_R:
+            radii.append(float(x))
+    # A thin shell has two radial levels; a deep wedge subdivided radially has one per
+    # division, and its axial and cut faces legitimately carry the intermediate ones. What
+    # must hold either way is that every node sits on one of a few *exact* circles, so the
+    # outer face is a true arc and not a faceted polygon.
+    R_out, R_in = max(radii), min(radii)
+    chk('bond shell nodes lie on a few exact circles (true arc, not faceted)',
+        2 <= len(radii) <= 64, '%d radial levels (tol %.0e): %.6f .. %.6f mm'
+        % (len(radii), TOL_R, R_in, R_out))
+    lev = np.array(radii)
+    dev = float(np.abs(lev[np.abs(rr[:, None] - lev[None, :]).argmin(axis=1)] - rr).max())
+    chk('shell node radii deviate from those exact circles by < 1 pm', dev < 1e-9,
+        'max deviation %.3e mm across %d levels' % (dev, len(radii)))
+    n_out = int((np.abs(rr - R_out) < TOL_R).sum())
+    chk('the outer face is a full exact circle at the largest radius', n_out > 0,
+        '%d nodes on r = %.6f mm' % (n_out, R_out))
+    # A full wheel is identified from the mesh, not from the report: it is the only case
+    # with no sector cut faces, because the last column of nodes is the first.
+    FULL = 'ES_BOND_SECTOR_START' not in W['elsets']
+    th = np.degrees(np.arctan2(P[:, 1], P[:, 0]))
+    rim = R_out - R_in
+    if FULL:
+        span = 360.0
+        arc = 2.0 * math.pi * R_out
+        sag = None
+        print('      R = %.6f mm, FULL WHEEL, circumference %.6f mm, rim %.6f mm'
+              % (R_out, arc, rim))
+        # Cluster before differencing: every angular station carries many nodes (one per
+        # radius and axial station) whose recovered angles differ in the last bits, so a
+        # raw diff is mostly ~1e-14 noise and its median is meaningless.
+        uth = np.sort(th)
+        keep = np.r_[True, np.diff(uth) > 1e-7]
+        uth = uth[keep]
+        # Include the wrap across +-180 deg: that gap is the seam, if there is one.
+        gaps = np.r_[np.diff(uth), 360.0 - (uth[-1] - uth[0])]
+        chk('full wheel closes without a seam',
+            float(gaps.max()) <= 1.5 * float(np.median(gaps)) + 1e-9,
+            '%d angular stations, largest gap %.6f deg vs median %.6f'
+            % (len(uth), gaps.max(), np.median(gaps)))
     else:
-        badn.append((e, 'quad on no recognised face'))
-        continue
-    if float(np.dot(n, want)) < 0.99:
-        badn.append((e, 'normal %s wanted %s' % (np.round(n, 4), np.round(want, 4))))
-chk('every bond shell quad normal points outward', not badn,
-    '%d shell quads checked, %d bad %s' % (len(shell_e), len(badn), badn[:2]))
+        span = float(th.max() - th.min())
+        arc = R_out * math.radians(span)
+        sag = arc * arc / (8.0 * R_out)
+        print('      R = %.6f mm, sector %.6f deg, arc %.6f mm, rim %.6f mm'
+              % (R_out, span, arc, rim))
+        print('      sagitta %.3f um = %.0f%% of the rim depth'
+              % (sag * 1000, 100 * sag / rim))
+    chk('sector agrees with the report', ('resolved_sector_deg' not in REPORT)
+        or abs(span - float(REPORT['resolved_sector_deg'])) < 1e-6,
+        '%.6f deg in the mesh' % span)
+    chk('arc length agrees with the report', ('arc_length_mm' not in REPORT)
+        or abs(arc - float(REPORT['arc_length_mm'])) < 1e-6, '%.6f mm' % arc)
+    if sag is not None:
+        # Not a correctness property -- a flat-looking sector is still a correct sector.
+        # It is flagged because "it renders as a rectangle" is the usual complaint.
+        #
+        # Two independent ways for a sector to read as an arc, and either suffices:
+        #  * a thin rim, where the outer face visibly bows across the band (sagitta > rim);
+        #  * a wide angle, where the two radial cut faces obviously converge. Past about
+        #    10 deg that convergence carries the shape on its own, and demanding
+        #    sagitta > rim there would wrongly condemn a deep chunky wedge -- exactly the
+        #    geometry that looks most like a slice of a real wheel.
+        bows = sag > rim
+        wide = span >= 10.0
+        warn('sector reads as an arc rather than a rectangle', bows or wide,
+             'sector %.3f deg, sagitta %.3f um vs rim %.3f um; widen the angle, lengthen '
+             'the arc, shrink the radius or thin the rim'
+             % (span, sag * 1000, rim * 1000))
+        print('      reads as an arc because %s'
+              % (' and '.join(filter(None, [
+                  'the outer face bows %.2fx its rim depth' % (sag / rim) if bows else '',
+                  'the cut faces converge at %.1f deg' % span if wide else '']))
+                 or 'NOTHING -- it will look flat'))
+
+    # --- every shell quad normal must point out of the sector -------------------
+    zmax = float(P[:, 2].max())
+    zmin = float(P[:, 2].min())
+    th0, th1 = math.radians(float(th.min())), math.radians(float(th.max()))
+    badn = []
+    for e, cc in shell_e.items():
+        q = np.array([W['nodes'][i] for i in cc])
+        n = np.cross(q[1] - q[0], q[2] - q[0])
+        n = n / max(float(np.linalg.norm(n)), 1e-30)
+        m = q.mean(axis=0)
+        rm = float(np.hypot(m[0], m[1]))
+        er = np.array([m[0] / rm, m[1] / rm, 0.0])
+        et = np.array([-m[1] / rm, m[0] / rm, 0.0])
+        # Classify by the quad's four *nodes*, not its centroid. A quad spanning an arc
+        # has its centroid on the chord, 5e-7 mm inside the circle here, so a
+        # centroid-radius test with a quantum-sized tolerance rejects every face on the
+        # cylinder. The nodes themselves lie on the circle exactly.
+        nr = np.hypot(q[:, 0], q[:, 1])
+        nth = np.arctan2(q[:, 1], q[:, 0])
+        if np.all(np.abs(nr - R_out) < 1e-9):
+            want = er
+        elif np.all(np.abs(nr - R_in) < 1e-9):
+            want = -er
+        elif np.all(np.abs(q[:, 2] - zmin) < 1e-9):
+            want = np.array([0.0, 0.0, -1.0])
+        elif np.all(np.abs(q[:, 2] - zmax) < 1e-9):
+            want = np.array([0.0, 0.0, 1.0])
+        elif np.all(np.abs(nth - th0) < 1e-9):
+            want = -et
+        elif np.all(np.abs(nth - th1) < 1e-9):
+            want = et
+        else:
+            badn.append((e, 'quad on no recognised face'))
+            continue
+        if float(np.dot(n, want)) < 0.99:
+            badn.append((e, 'normal %s wanted %s' % (np.round(n, 4), np.round(want, 4))))
+    chk('every bond shell quad normal points outward', not badn,
+        '%d shell quads checked, %d bad %s' % (len(shell_e), len(badn), badn[:2]))
 
 # --- grit facet orientation: outward, by the divergence theorem -------------
 groups = {}
@@ -573,14 +585,21 @@ else:
       % ((a_lo - best) * 1e6, _sd * 1e6))
   print('      ground face at a = %.9f mm, closest grit material a = %.9f mm'
         % (a_lo, best))
-  print('      max engaging protrusion = %.4f um above r = %.4f'
-        % ((best - R_out) * 1000, R_out))
+  if not BONDLESS:
+      print('      max engaging protrusion = %.4f um above r = %.4f'
+            % ((best - R_out) * 1000, R_out))
 
 # --- grits stay on the wheel -----------------------------------------------
 gn = np.array([W['nodes'][i] for i in sorted(set(n for c in grit_e.values() for n in c))])
 gth = np.degrees(np.arctan2(gn[:, 1], gn[:, 0]))
 gr = np.hypot(gn[:, 0], gn[:, 1])
-if FULL:
+if BONDLESS:
+    # "On the wheel" is a statement about the rim, and there is no rim to be on.
+    print('      no bond rim: the arc, width and bore containment checks do not '
+          'apply')
+    print('      grits span %.4f..%.4f deg, r %.6f..%.6f mm'
+          % (gth.min(), gth.max(), gr.min(), gr.max()))
+elif FULL:
     # Every angle is on the wheel, so there is nothing to overhang.
     print('      full wheel: grits span %.4f..%.4f deg, no cut faces to overhang'
           % (gth.min(), gth.max()))
@@ -589,10 +608,13 @@ else:
         and float(gth.max()) <= th.max() + 1e-9,
         'grits %.4f..%.4f deg, bond %.4f..%.4f deg'
         % (gth.min(), gth.max(), th.min(), th.max()))
-chk('grits lie within the wheel width', float(np.abs(gn[:, 2]).max()) <= zmax + 1e-9,
-    'grit |z| max %.6f mm, wheel half-width %.6f mm' % (np.abs(gn[:, 2]).max(), zmax))
-chk('no grit is buried below the bore', float(gr.min()) >= R_in - 1e-9,
-    'min grit radius %.6f mm vs bore %.6f mm' % (gr.min(), R_in))
+if not BONDLESS:
+    chk('grits lie within the wheel width',
+        float(np.abs(gn[:, 2]).max()) <= zmax + 1e-9,
+        'grit |z| max %.6f mm, wheel half-width %.6f mm'
+        % (np.abs(gn[:, 2]).max(), zmax))
+    chk('no grit is buried below the bore', float(gr.min()) >= R_in - 1e-9,
+        'min grit radius %.6f mm vs bore %.6f mm' % (gr.min(), R_in))
 
 # --- grit-grit interpenetration, tested on the actual polyhedra -------------
 # A bounding-sphere test is far too pessimistic for these shapes: the library's
