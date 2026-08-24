@@ -1,0 +1,107 @@
+{
+ "material": "silicon_carbide",
+ "material_label": "Silicon carbide, SiC-N (supplied as 'monocrystalline silicon')",
+ "wheel_radius_mm": 25.0,
+ "dc_nm": 52.91999999999998,
+ "elements_per_dc": 5.0,
+ "jobs": [
+  {
+   "job": 1,
+   "name": "ARC_26UM",
+   "kind": "arc",
+   "peak_um": 26.0,
+   "grain_scale": 7.716,
+   "length_mm": 2.2817792329214956,
+   "width_mm": 0.14,
+   "depth_mm": 0.0351,
+   "h_max_um": 26.0,
+   "h_entry_um": 0.0,
+   "h_exit_um": 0.0,
+   "crossings_um": [
+    -1139.7279504637288,
+    1139.7279504637288
+   ],
+   "ductile_fraction": 0.001999000499750125,
+   "dc_nm": 52.91999999999998,
+   "elements": 219450,
+   "element_um": [
+    4.003121461265782,
+    3.99999999999999,
+    2.999999999999999,
+    5.100000000000004
+   ],
+   "elements_across_dc": 0.01764,
+   "stable_dt_s": 7.707408927840299e-10,
+   "increments": 98942.85936819826,
+   "est_hours_8": 5.744182668875955,
+   "H0_mm": 0.026,
+   "HG": 0.0,
+   "RTIP_mm": 25.031329172073548
+  },
+  {
+   "job": 2,
+   "name": "ARC_80NM",
+   "kind": "arc",
+   "peak_um": 0.08,
+   "grain_scale": 1.0,
+   "length_mm": 0.1265013777928118,
+   "width_mm": 0.005,
+   "depth_mm": 0.0004,
+   "h_max_um": 0.08,
+   "h_entry_um": 2.574980159653073e-15,
+   "h_exit_um": 2.574980159653073e-15,
+   "crossings_um": [
+    -36.799726970821595,
+    36.799726970821595
+   ],
+   "ductile_fraction": 0.41879060469765117,
+   "dc_nm": 52.91999999999998,
+   "elements": 171836,
+   "element_um": [
+    0.3504193290659606,
+    0.3499999999999998,
+    0.010583999999999979,
+    0.032266646999999996
+   ],
+   "elements_across_dc": 5.000000000000008,
+   "stable_dt_s": 2.7191738697420525e-12,
+   "increments": 1624284.7293588868,
+   "est_hours_8": 73.8387806227814,
+   "H0_mm": 8e-05,
+   "HG": 0.0,
+   "RTIP_mm": 25.004060286687825
+  },
+  {
+   "job": 3,
+   "name": "RAMP_80NM",
+   "kind": "ramp",
+   "peak_um": 0.08,
+   "grain_scale": 1.0,
+   "length_mm": 0.02,
+   "width_mm": 0.005,
+   "depth_mm": 0.0004,
+   "h_max_um": 0.08000032477018831,
+   "h_entry_um": 3.2477018830821973e-07,
+   "h_exit_um": 0.08000032477018831,
+   "crossings_um": [
+    2.768311521160576
+   ],
+   "ductile_fraction": 0.6381809095452274,
+   "dc_nm": 52.91999999999998,
+   "elements": 27132,
+   "element_um": [
+    0.3508771929824562,
+    0.3499999999999998,
+    0.010583999999999979,
+    0.032266646999999996
+   ],
+   "elements_across_dc": 5.000000000000008,
+   "stable_dt_s": 2.7191738697420525e-12,
+   "increments": 318724.2553007031,
+   "est_hours_8": 2.2877318769361574,
+   "H0_mm": 4.2000000000000004e-05,
+   "HG": 0.004,
+   "RTIP_mm": 25.004060286683874
+  }
+ ]
+}

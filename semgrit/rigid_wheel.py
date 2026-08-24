@@ -763,11 +763,17 @@ def write_rigid_wheel_inp(
             chip = None
             if getattr(analysis, "material_model", "") == "hybrid":
                 from .hybrid import chip_field
+                # The overrides travel with the card, not just with the
+                # preview: plan_hybrid passes the same two, so a prescribed
+                # trajectory cannot show one profile in the notebook and write
+                # another into the .inp.
                 chip = chip_field(
                     pl, motion, wp,
                     rotation_reversed=bool(
                         getattr(analysis, "rotation_reversed", False)),
-                    dc_mm=analysis.hybrid.critical_depth_mm())
+                    dc_mm=analysis.hybrid.critical_depth_mm(),
+                    h0_override=getattr(analysis.hybrid, "h0_override_mm", None),
+                    hg_override=getattr(analysis.hybrid, "hg_override", None))
             hybrid_info = write_section_and_material(w, analysis, wp, chip)
             write_step(w, analysis, wp, motion, step_time_s,
                        engage_surface=bool(engage) and len(engage) < len(faces))

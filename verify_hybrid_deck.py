@@ -385,24 +385,44 @@ def main() -> int:
     close("RTIP is the governing grit vertex radius", rtip,
           hy["chip_field"]["rtip_mm"], rtol=0.0, atol=0.0)
 
-    # HG must equal -v_r / (omega * r_tip), from the deck's own motion block.
+    # A PRESCRIBED profile replaces the derivation on purpose: the deck is
+    # cutting a specified trajectory, not one that fell out of the infeed. So
+    # the derived-value checks below are the right ones only when the term was
+    # in fact derived. Where it was imposed, the card is checked against the
+    # report instead -- the card must still be exactly the number the build
+    # decided, which is the property that actually protects the run.
+    cf = hy.get("chip_field") or {}
+    hg_fixed = bool(cf.get("hg_prescribed"))
+    h0_fixed = bool(cf.get("h0_prescribed"))
+
     m = info["motion"]
     v_r = m["radial_speed_mm_s"]
     omega = m["omega_rad_s"]
     way = -1.0 if rot_rev else 1.0
-    close("HG = -v_r / (omega r_tip)", hg, -way * v_r / (omega * rtip),
-          rtol=0.0, atol=0.0)
-    check("HG has the sign that makes the cut deepen along the sweep",
-          (hg < 0) == (not rot_rev),
-          "HG = %.6g, rotation_reversed = %s" % (hg, rot_rev))
+    if hg_fixed:
+        close("HG in the card is the prescribed HG from the report",
+              hg, cf["hg"], rtol=0.0, atol=0.0)
+        print("      (HG prescribed, so it is not checked against -v_r/omega r)")
+    else:
+        close("HG = -v_r / (omega r_tip)", hg, -way * v_r / (omega * rtip),
+              rtol=0.0, atol=0.0)
+        check("HG has the sign that makes the cut deepen along the sweep",
+              (hg < 0) == (not rot_rev),
+              "HG = %.6g, rotation_reversed = %s" % (hg, rot_rev))
 
     # H0 must put h at the governing vertex exactly one standoff below the
     # ground face -- that is the tangency the geometry verifiers already
     # check, expressed as a chip thickness.
     u_gov = hy["chip_field"]["u_gov_mm"]
     h_gov = h0 + hg * u_gov - u_gov ** 2 / (2.0 * rtip)
-    close("h at the governing vertex is minus the standoff", h_gov,
-          -(info["clearance_um"] / 1000.0 + 1e-9), rtol=0.0, atol=5e-12)
+    if h0_fixed:
+        close("H0 in the card is the prescribed H0 from the report",
+              h0, cf["h0_mm"], rtol=0.0, atol=0.0)
+        print("      (H0 prescribed, so h at the governing vertex is not the "
+              "standoff)")
+    else:
+        close("h at the governing vertex is minus the standoff", h_gov,
+              -(info["clearance_um"] / 1000.0 + 1e-9), rtol=0.0, atol=5e-12)
 
     # -- 4. the deck's own nodes -------------------------------------------
     print("4. h over the workpiece, from the node coordinates")
@@ -440,13 +460,25 @@ def main() -> int:
               n_duct > 0 and n_brit > 0,
               "ductile %d, brittle %d -- if one is zero the switch does "
               "nothing on this deck" % (n_duct, n_brit))
-        # h must be monotone along the sweep over a block this short: the
-        # linear term beats the parabola by four orders of magnitude.
+        # h is monotone along the sweep whenever the depth comes from a radial
+        # infeed: over a block this short the linear term beats the parabola by
+        # four orders of magnitude. A PRESCRIBED arc is the exception and is
+        # meant to be -- it rises to a peak and falls back, which is the whole
+        # point of it -- so there the requirement is single-humped rather than
+        # monotone, i.e. the slope changes sign at most once.
         order = np.argsort(u)
         dh = np.diff(hl[order])
-        check("h is monotone in u across the block",
-              bool(np.all(dh <= 1e-15) or np.all(dh >= -1e-15)),
-              "max +%.3g, min %.3g" % (dh.max(), dh.min()))
+        if hg_fixed or h0_fixed:
+            sign = np.sign(dh[np.abs(dh) > 1e-15])
+            flips = int(np.count_nonzero(np.diff(sign))) if sign.size else 0
+            check("h is single-humped in u (prescribed arc rises then falls)",
+                  flips <= 1,
+                  "%d slope reversals; max +%.3g, min %.3g"
+                  % (flips, dh.max(), dh.min()))
+        else:
+            check("h is monotone in u across the block",
+                  bool(np.all(dh <= 1e-15) or np.all(dh >= -1e-15)),
+                  "max +%.3g, min %.3g" % (dh.max(), dh.min()))
     elif h_src in (2, 3):
         # Forced modes. h is not read from anywhere, so neither the coordinates
         # nor the field says anything about the branch -- the only correct check
@@ -611,7 +643,10 @@ def main() -> int:
     check("the header states dc", "critical depth of cut" in hdr)
     if h_src == 0:
         check("the header states the transition station or says there is none",
-              ("transition at u" in hdr) or ("ENTIRELY" in hdr))
+              ("transition at u" in hdr) or ("ENTIRELY" in hdr)
+              or ("ductile-brittle transitions, at u" in hdr),
+              "an arc that crosses dc twice reports both, so the singular "
+              "phrase is not the only acceptable one")
     else:
         check("the header names field variable 1 as the h source",
               "field variable 1" in hdr,

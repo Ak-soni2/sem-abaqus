@@ -89,16 +89,60 @@ def _cache_key(images, pixel_size_um, seg_params, height_model, profile,
     return hashlib.sha1("\n".join(bits).encode("utf-8")).hexdigest()
 
 
+def _restage(images, pixel_size_um, seg_params, solids, grains, log):
+    """Rebuild the per-image stage records for a cache hit.
+
+    Only the two cheap steps are repeated -- load the image, segment it -- and the
+    grains and solids are taken from the cached library rather than rebuilt, so
+    the records the figures read are the ones the cache already describes. The
+    per-grain validation reports are not cached, so they come back empty and the
+    verification figure says so rather than inventing them.
+    """
+    import time
+
+    from .measure import measure_all
+    from .metrology import load_sem_image
+    from .segment import segment_grains
+
+    t0 = time.time()
+    out = []
+    by_image = {}
+    for s in solids:
+        by_image.setdefault(s.source_image, []).append(s)
+    for path in images:
+        base = os.path.splitext(os.path.basename(path))[0]
+        try:
+            sem = load_sem_image(path, pixel_size_um=(pixel_size_um or None))
+            stages = {}
+            seg = segment_grains(sem, seg_params, stages=stages)
+            g = [x for x in grains if x.source_image == path] or measure_all(seg, sem)
+            out.append({"path": path, "name": base, "sem": sem, "seg": seg,
+                        "stages": stages, "grains": g,
+                        "solids": by_image.get(path, []), "reports": []})
+        except Exception as exc:                              # noqa: BLE001
+            log("%-22s could not re-derive stages: %s" % (base, exc))
+    if out:
+        log("%-22s stages re-derived in %.1f s" % ("", time.time() - t0))
+    return out
+
+
 def measure_images(images: Sequence[str], outdir: str, *,
                    pixel_size_um: float = 0.0,
                    seg_params=None, height_model=None, profile=None,
                    simplify_um: float = 0.0, max_vertices: int = 0,
                    interior_only: bool = True, cache: bool = True,
-                   log=print) -> dict:
+                   keep_stages: bool = False, log=print) -> dict:
     """SEM images -> a library of meshed grain solids, with the report printed.
 
-    Returns ``{"solids", "grains", "images"}`` and writes the per-image CSVs and
-    ``grain_library.pkl`` into ``outdir``.
+    Returns ``{"solids", "grains", "images", "cached", "per_image"}`` and writes
+    the per-image CSVs and ``grain_library.pkl`` into ``outdir``.
+
+    ``keep_stages=True`` additionally returns, per image, the ``SemImage``, the
+    ``Segmentation``, every segmentation intermediate (see
+    :data:`semgrit.segment.STAGE_KEYS`) and the per-grain validation reports --
+    everything needed to *show* what the pipeline did to the picture rather than
+    just report how many grains came out. These are megabytes of arrays, so they
+    are never written to the cache; asking for them forces a fresh measurement.
 
     ``pixel_size_um = 0`` reads the scale from the image metadata, which is the only
     trustworthy source: the drawn scale bar is rounded for display, and getting the
@@ -136,16 +180,29 @@ def measure_images(images: Sequence[str], outdir: str, *,
                     "(same images, same settings)" % len(held["solids"]))
                 log("                delete %s or set cache=False to re-measure"
                     % os.path.basename(pkl))
+                per = []
+                if keep_stages:
+                    # The stages are tens of megabytes of arrays and are never
+                    # pickled. Re-deriving them is only the image load plus the
+                    # segmentation -- under a second an image -- while the slow
+                    # part of a measurement, lofting and validating every grain
+                    # into a solid, still comes from the cache. So asking for the
+                    # figures does not throw the library away.
+                    log("                re-deriving the segmentation stages for "
+                        "the figures (the solids stay cached)")
+                    per = _restage(images, pixel_size_um, seg_params,
+                                   held["solids"], held.get("grains", []), log)
                 return {"solids": held["solids"], "grains": held.get("grains", []),
-                        "images": list(images), "cached": True}
+                        "images": list(images), "cached": True, "per_image": per}
         except Exception:                      # a stale or truncated cache is not fatal
             pass
 
     t0 = time.time()
-    solids, grains = [], []
+    solids, grains, per_image = [], [], []
     for path in images:
         sem = load_sem_image(path, pixel_size_um=(pixel_size_um or None))
-        seg = segment_grains(sem, seg_params)
+        stages = {} if keep_stages else None
+        seg = segment_grains(sem, seg_params, stages=stages)
         g = measure_all(seg, sem)
         s, reports = build_grain_library(
             g, seg, sem, height_model=height_model, profile=profile,
@@ -169,6 +226,10 @@ def measure_images(images: Sequence[str], outdir: str, *,
                 % ("", 100 * sem.scalebar_agreement))
         for w in sem.warnings:
             log("%-22s warning: %s" % ("", w))
+        if keep_stages:
+            per_image.append({"path": path, "name": base, "sem": sem, "seg": seg,
+                              "stages": stages, "grains": g, "solids": s,
+                              "reports": reports})
         solids.extend(s)
         grains.extend(g)
 
@@ -183,7 +244,7 @@ def measure_images(images: Sequence[str], outdir: str, *,
         pickle.dump({"solids": solids, "grains": grains, "key": key}, fh)
     log("%-22s measured in %.1f s" % ("", time.time() - t0))
     return {"solids": solids, "grains": grains, "images": list(images),
-            "cached": False}
+            "cached": False, "per_image": per_image}
 
 
 def library_summary(solids: Sequence, log=print) -> dict:

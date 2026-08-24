@@ -64,7 +64,8 @@ _TEMPLATE = r"""
 
   <div id="cadtools" style="position:absolute;top:10px;left:10px;background:#ffffffe8;
        border:1px solid #b9c0c8;border-radius:6px;padding:8px 10px;font-size:12px;
-       line-height:1.65;width:198px;max-height:calc(100%% - 20px);overflow:auto;
+       line-height:1.65;width:206px;max-height:calc(100%% - 46px);overflow-y:auto;
+       overflow-x:hidden;overscroll-behavior:contain;
        box-shadow:0 2px 8px #0002;backdrop-filter:blur(4px)">
     <div class="cadhd">View</div>
     <div style="display:flex;gap:3px;flex-wrap:wrap">
@@ -93,6 +94,28 @@ _TEMPLATE = r"""
     <input type="range" id="cadcut" min="0" max="1000" value="500"
            style="width:100%%;margin:4px 0 0">
     <label><input type="checkbox" id="cadflip"> flip side</label>
+    <label><input type="checkbox" id="cadcap" checked> cap the cut face</label>
+
+    <div class="cadhd">Explode</div>
+    <input type="range" id="cadexplode" min="0" max="100" value="0"
+           style="width:100%%" title="pull the parts apart along the radius">
+    <div id="cadexplodetxt" style="font-size:10px;color:#5a636c">assembled</div>
+
+    <div class="cadhd">Colour the grains by</div>
+    <select id="cadcolour" style="width:100%%">
+      <option value="none">part colour</option>
+      <option value="protrusion_um">protrusion above the bond</option>
+      <option value="height_um">grain height</option>
+      <option value="width_um">grain width</option>
+      <option value="volume_um3">grain volume</option>
+      <option value="engage">engages the block (yes / no)</option>
+    </select>
+    <div id="cadlegend" style="margin-top:4px;display:none">
+      <div id="cadlegbar" style="height:10px;border:1px solid #a9b2bb;
+           border-radius:2px"></div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;
+           color:#5a636c"><span id="cadleglo"></span><span id="cadleghi"></span></div>
+    </div>
 
     <div class="cadhd">Measure</div>
     <div style="color:#5a636c">shift-click two points</div>
@@ -111,17 +134,91 @@ _TEMPLATE = r"""
 
   <div id="cadinfo" style="position:absolute;top:10px;right:10px;background:#ffffffe8;
        border:1px solid #b9c0c8;border-radius:6px;padding:8px 10px;font-size:12px;
-       line-height:1.6;width:224px;max-height:calc(100%% - 20px);overflow:auto;
+       line-height:1.6;width:224px;max-height:calc(100%% - 66px);overflow-y:auto;
+       overflow-x:hidden;overscroll-behavior:contain;
        box-shadow:0 2px 8px #0002;backdrop-filter:blur(4px)">
     <div class="cadhd" style="margin-top:0">Inspect</div>
     <div id="cadpick" style="color:#5a636c">click a grain</div>
   </div>
 
-  <div id="cadstat" style="position:absolute;bottom:7px;left:11px;font-size:11px;
-       color:#39424b;font-family:ui-monospace,Consolas,monospace">loading three.js
-       &hellip;</div>
-  <div id="cadhelp" style="position:absolute;bottom:7px;right:118px;font-size:11px;
-       color:#5a636c">drag orbit &middot; right-drag pan &middot; scroll zoom</div>
+  <div id="cadstat" style="position:absolute;bottom:9px;left:11px;right:210px;
+       font-size:11px;color:#39424b;white-space:nowrap;overflow:hidden;
+       text-overflow:ellipsis;
+       font-family:ui-monospace,Consolas,monospace">loading three.js &hellip;</div>
+  <div id="cadhelp" style="position:absolute;bottom:9px;right:64px;font-size:11px;
+       color:#5a636c;max-width:44%%;text-align:right;white-space:nowrap;
+       overflow:hidden;text-overflow:ellipsis"
+       >drag orbit &middot; right-drag pan &middot; scroll zoom</div>
+
+  <!-- Viewport size. A notebook output cell is a fixed box, and 720 px is a
+       compromise between "big enough to work in" and "does not push the next cell
+       off the screen". Rather than pick a bigger compromise, let the user choose:
+       fullscreen for inspection, a drag handle for a permanent nudge. -->
+  <div style="position:absolute;bottom:26px;right:11px;z-index:5;display:flex;gap:4px">
+    <button id="cadkeysbtn" title="keyboard shortcuts (?)">?</button>
+    <button id="cadfull"
+            title="fullscreen (double-click the canvas, or Esc to leave)"
+            >&#x26F6;</button>
+  </div>
+  <div id="cadgrip" title="drag to resize the viewer"
+       style="position:absolute;left:0;right:0;bottom:0;height:7px;cursor:ns-resize;
+              background:linear-gradient(#0000,#0000001a)"></div>
+
+  <!-- First run: the viewer opens with no indication that anything is clickable.
+       Three lines, dismissed for good on the first click. -->
+  <div id="cadfirst" style="position:absolute;left:50%%;top:50%%;
+       transform:translate(-50%%,-50%%);background:#12365ee8;color:#fff;
+       padding:13px 17px;border-radius:8px;font-size:12.5px;line-height:1.75;
+       box-shadow:0 6px 24px #0005;z-index:6;pointer-events:none;text-align:left">
+    <b style="font-size:13.5px">This is the model the .inp contains</b><br>
+    <span style="opacity:.92">
+    &#x25CF;&nbsp; <b>click a grain</b> to read its size and protrusion<br>
+    &#x25CF;&nbsp; <b>G</b> to drag the workpiece, <b>F</b> to fit, <b>?</b> for all keys<br>
+    &#x25CF;&nbsp; <b>section plane</b> and <b>colour by</b> are on the left</span>
+    <div style="opacity:.66;margin-top:5px;font-size:11px">click anywhere to dismiss</div>
+  </div>
+
+  <!-- "You are here". At wheel scale the deck is a 2 mm slice on a 50 mm disc and
+       the contact is far below one pixel, so the opening view is an empty grey
+       circle unless something points at it. The 3-D marker cannot be made bigger
+       without becoming larger than what it points at, so the label lives in screen
+       space instead: always legible, never part of the geometry. -->
+  <div id="cadwhere" title="jump to the contact (C)"
+       style="position:absolute;left:0;top:0;z-index:4;display:none;cursor:pointer;
+       transform:translate(-50%%,-50%%)">
+    <div style="position:relative">
+      <div style="width:34px;height:34px;border:2px solid #f2731a;border-radius:50%%;
+                  box-shadow:0 0 0 2px #ffffffcc,0 0 9px #f2731a55"></div>
+      <div id="cadwherelab" style="position:absolute;left:44px;top:3px;
+           white-space:nowrap;background:#f2731aE8;color:#fff;font-size:11px;
+           font-weight:600;padding:2px 7px;border-radius:4px;
+           box-shadow:0 1px 5px #0003">the cut &middot; press C</div>
+    </div>
+  </div>
+
+  <!-- Keyboard reference, toggled with ? -->
+  <div id="cadkeys" style="position:absolute;left:50%%;top:50%%;
+       transform:translate(-50%%,-50%%);background:#ffffffF2;border:1px solid #b9c0c8;
+       border-radius:8px;padding:12px 16px;font-size:12px;line-height:1.8;
+       box-shadow:0 6px 24px #0004;z-index:7;display:none">
+    <b>Keyboard</b><br>
+    <table style="font-size:11.5px;border-spacing:9px 1px">
+      <tr><td><kbd>F</kbd></td><td>zoom to fit</td>
+          <td><kbd>G</kbd></td><td>arm / disarm block drag</td></tr>
+      <tr><td><kbd>&larr;</kbd><kbd>&rarr;</kbd></td><td>nudge along the arc</td>
+          <td><kbd>&uarr;</kbd><kbd>&darr;</kbd></td><td>nudge the standoff</td></tr>
+      <tr><td><kbd>1</kbd>..<kbd>4</kbd></td><td>iso / front / top / right</td>
+          <td><kbd>5</kbd> <kbd>6</kbd></td><td>face / axial</td></tr>
+      <tr><td><kbd>W</kbd></td><td>wheel view</td>
+          <td><kbd>C</kbd></td><td>contact view</td></tr>
+      <tr><td><kbd>E</kbd></td><td>edges on / off</td>
+          <td><kbd>O</kbd></td><td>orthographic</td></tr>
+      <tr><td><kbd>X</kbd></td><td>section: cycle axis</td>
+          <td><kbd>shift</kbd>+click</td><td>measure two points</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>cancel a drag</td>
+          <td><kbd>?</kbd></td><td>this list</td></tr>
+    </table>
+  </div>
 
   <style>
     #cadwrap button{font:inherit;font-size:11px;padding:2px 7px;cursor:pointer;
@@ -131,8 +228,20 @@ _TEMPLATE = r"""
     #cadwrap button.on{background:linear-gradient(#cfe4f7,#a9cdec);border-color:#5b8fbf}
     #cadwrap label{display:block;cursor:pointer;user-select:none}
     #cadwrap .cadhd{font-weight:600;margin:9px 0 3px;padding-top:6px;
-      border-top:1px solid #dfe4e9}
+      border-top:1px solid #dfe4e9;cursor:pointer;user-select:none;
+      display:flex;align-items:center;gap:4px}
     #cadwrap .cadhd:first-child{margin-top:0;padding-top:0;border-top:none}
+    /* The left column holds ten sections in 198 px. Collapsing is what makes it
+       navigable rather than a scroll well; the caret is the affordance. */
+    #cadwrap .cadhd .car{display:inline-block;width:8px;font-size:9px;color:#7a838c;
+      transition:transform .12s}
+    #cadwrap .cadhd.shut .car{transform:rotate(-90deg)}
+    #cadwrap .cadsec.shut{display:none}
+    #cadwrap kbd{background:#eef1f4;border:1px solid #c3cad1;border-bottom-width:2px;
+      border-radius:3px;padding:0 4px;font:inherit;font-size:10.5px;
+      font-family:ui-monospace,Consolas,monospace}
+    #cadwrap:fullscreen{border-radius:0;height:100%%!important}
+    #cadwrap:fullscreen #cadgrip{display:none}
     #cadtree label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     #cadtree .sw{display:inline-block;width:9px;height:9px;border:1px solid #7a838c;
       border-radius:2px;margin-right:4px;vertical-align:-1px}
@@ -158,7 +267,11 @@ try {
   const wrap = document.getElementById('cadwrap');
   const canvas = document.getElementById('cadcanvas');
 
+  // stencil: true is required by the section cap, which fills the cut face using a
+  // stencil pass. WebGL gives a stencil buffer by default, but asking is explicit
+  // and costs nothing.
   const renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true,
+                                            stencil:true,
                                             preserveDrawingBuffer:true});
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.localClippingEnabled = true;
@@ -299,6 +412,7 @@ try {
 
     buildBC();
     buildEditPanel();
+    makeCollapsible();
 
     // The section plane must range over the deck, not over the ghost: a slider that
     // spans 50 mm of context moves in steps far bigger than the whole model and never
@@ -406,15 +520,153 @@ try {
     };
   });
   document.getElementById('cadfit').onclick = () => frame(ISO);
+
+  const clickView = v => {
+    const b = document.querySelector('#cadtools button[data-v="' + v + '"]');
+    if (b) b.click();
+  };
+
   addEventListener('keydown', e => {
-    if (e.key === 'f' || e.key === 'F') frame(ISO);
-    if (e.key === 'g' || e.key === 'G') setDragArmed(!dragArm);
-    if (e.key === 'Escape') cancelDrag();
+    // Never steal a key from a field the user is typing in: the number inputs in
+    // the edit panel are full of digits, and 'e' is legal in a float literal.
+    const t = e.target, tag = t && t.tagName;
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') {
+      if (e.key === 'Escape') t.blur();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    if (k === 'f' || k === 'F') frame(ISO);
+    if (k === 'g' || k === 'G') setDragArmed(!dragArm);
+    if (k === '?' || (k === '/' && e.shiftKey)) toggleKeys();
+    if (k === '1') clickView('iso');
+    if (k === '2') clickView('front');
+    if (k === '3') clickView('top');
+    if (k === '4') clickView('right');
+    if (k === '5') clickView('face');
+    if (k === '6') clickView('axial');
+    if (k === 'w' || k === 'W') clickView('wheelview');
+    if (k === 'c' || k === 'C') clickView('contact');
+    if (k === 'e' || k === 'E') {
+      const b = document.getElementById('cadedges');
+      b.checked = !b.checked; b.onchange({target: b});
+    }
+    if (k === 'o' || k === 'O') {
+      const b = document.getElementById('cadortho');
+      b.checked = !b.checked;
+      b.onchange({target: b});      // the handler reads e.target.checked
+    }
+    if (k === 'x' || k === 'X') {
+      // Cycle off -> X -> Z -> Y -> off, so one key walks every section plane.
+      const s = document.getElementById('cadaxis');
+      s.selectedIndex = (s.selectedIndex + 1) %% s.options.length;
+      s.onchange();
+    }
+    if (k === 'Escape') {
+      if (document.getElementById('cadkeys').style.display === 'block') toggleKeys();
+      else cancelDrag();
+    }
     if (!dragArm || !EDIT || !EDIT.block) return;
-    const k = {ArrowLeft: ['arc', -1], ArrowRight: ['arc', 1],
-               ArrowUp: ['rad', 1], ArrowDown: ['rad', -1]}[e.key];
-    if (k) { nudge(k[0], k[1]); e.preventDefault(); }
+    const nk = {ArrowLeft: ['arc', -1], ArrowRight: ['arc', 1],
+                ArrowUp: ['rad', 1], ArrowDown: ['rad', -1]}[k];
+    if (nk) { nudge(nk[0], nk[1]); e.preventDefault(); }
   });
+
+  function toggleKeys() {
+    const p = document.getElementById('cadkeys');
+    p.style.display = (p.style.display === 'block') ? 'none' : 'block';
+  }
+  document.getElementById('cadkeysbtn').onclick = toggleKeys;
+  document.getElementById('cadkeys').onclick = toggleKeys;
+  document.getElementById('cadwhere').onclick = () => clickView('contact');
+
+  // ---- viewport size -------------------------------------------------------
+  const fullBtn = document.getElementById('cadfull');
+  fullBtn.onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (wrap.requestFullscreen) wrap.requestFullscreen();
+  };
+  // A notebook iframe may refuse fullscreen (no allow="fullscreen"). Say so once
+  // rather than leaving a button that silently does nothing.
+  wrap.addEventListener('fullscreenerror', () => {
+    fullBtn.title = 'this notebook frame does not permit fullscreen; ' +
+                    'drag the bottom edge instead';
+    fullBtn.style.opacity = '0.45';
+  });
+  document.addEventListener('fullscreenchange', () => {
+    fullBtn.innerHTML = document.fullscreenElement ? '&#x2715;' : '&#x26F6;';
+    setTimeout(resize, 60);
+  });
+  canvas.addEventListener('dblclick', () => fullBtn.onclick());
+
+  // Drag the bottom edge to resize. Persisted per notebook so the choice survives a
+  // re-run of the cell, which is what makes it feel like a setting and not a fidget.
+  const HKEY = 'semgrit.cadviewer.height';
+  try {
+    const kept = parseInt(localStorage.getItem(HKEY) || '', 10);
+    if (kept >= 260 && kept <= 4000) wrap.style.height = kept + 'px';
+  } catch (err) { /* storage blocked in a sandboxed frame; the default stands */ }
+  (() => {
+    const grip = document.getElementById('cadgrip');
+    let y0 = 0, h0 = 0;
+    grip.addEventListener('pointerdown', ev => {
+      y0 = ev.clientY; h0 = wrap.clientHeight;
+      grip.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    grip.addEventListener('pointermove', ev => {
+      if (!grip.hasPointerCapture(ev.pointerId)) return;
+      const h = Math.max(260, Math.min(4000, h0 + (ev.clientY - y0)));
+      wrap.style.height = h + 'px';
+      resize();
+    });
+    grip.addEventListener('pointerup', ev => {
+      grip.releasePointerCapture(ev.pointerId);
+      try { localStorage.setItem(HKEY, String(wrap.clientHeight)); } catch (err) {}
+    });
+  })();
+
+  // ---- collapsible panel sections -----------------------------------------
+  // Everything after a .cadhd up to the next .cadhd is that section's body. Called
+  // AFTER the tree, BC and edit panels are populated -- they are built inside the
+  // GLTF callback, so running this at module scope would bind empty sections.
+  function makeCollapsible() {
+    document.querySelectorAll('#cadtools .cadhd').forEach(hd => {
+      if (hd.dataset.coll) return;                  // idempotent: safe to re-run
+      hd.dataset.coll = '1';
+      const car = document.createElement('span');
+      car.className = 'car'; car.textContent = '▼';
+      hd.insertBefore(car, hd.firstChild);
+      const body = [];
+      for (let n = hd.nextElementSibling; n && !n.classList.contains('cadhd');
+           n = n.nextElementSibling) { n.classList.add('cadsec'); body.push(n); }
+      const key = 'semgrit.cadviewer.shut.' + hd.textContent.trim();
+      const set = shut => {
+        hd.classList.toggle('shut', shut);
+        body.forEach(n => n.classList.toggle('shut', shut));
+        try { localStorage.setItem(key, shut ? '1' : '0'); } catch (err) {}
+      };
+      let shut = false;
+      try { shut = localStorage.getItem(key) === '1'; } catch (err) {}
+      if (shut) set(true);
+      hd.onclick = () => set(!hd.classList.contains('shut'));
+    });
+  }
+
+  // ---- first-run hint ------------------------------------------------------
+  (() => {
+    const f = document.getElementById('cadfirst');
+    if (!f) return;
+    let seen = false;
+    try { seen = localStorage.getItem('semgrit.cadviewer.seen') === '1'; } catch (e) {}
+    if (seen) { f.remove(); return; }
+    const go = () => {
+      f.remove();
+      try { localStorage.setItem('semgrit.cadviewer.seen', '1'); } catch (e) {}
+    };
+    setTimeout(go, 12000);
+    wrap.addEventListener('pointerdown', go, {once: true});
+  })();
 
   document.getElementById('cadedges').onchange = e => {
     parts.forEach(p => {
@@ -448,8 +700,108 @@ try {
     const at = lo + (hi - lo) * (cutSlide.value / 1000);
     clip.setFromNormalAndCoplanarPoint(n, deckBox.min.clone().setComponent(a, at));
   }
-  axisSel.onchange = applyClip; cutSlide.oninput = applyClip;
-  flipBox.onchange = applyClip;
+  axisSel.onchange = () => { applyClip(); syncCap(); };
+  cutSlide.oninput = () => { applyClip(); syncCap(); };
+  flipBox.onchange = () => { applyClip(); syncCap(); };
+
+  // ---- capping the cut face ------------------------------------------------
+  // Clipping alone leaves the section hollow: you look through the cut and see the
+  // inside of the far surface, which reads as a broken model rather than a
+  // section. The standard fix is a stencil pass -- draw the back faces of the
+  // clipped geometry into the stencil buffer, the front faces out of it, and what
+  // remains set is exactly the solid interior, which a full-screen quad then
+  // fills. Cheap, exact, and it needs no CSG.
+  let capPlane = null, capStencil = [];
+  const CAP_COL = 0xcfd6dd;
+
+  function buildCap() {
+    if (capPlane) return;
+    const g = new THREE.PlaneGeometry(1, 1);
+    const m = new THREE.MeshStandardMaterial({
+      color: CAP_COL, metalness: 0.0, roughness: 0.85,
+      side: THREE.DoubleSide,
+      stencilWrite: true, stencilRef: 0,
+      stencilFunc: THREE.NotEqualStencilFunc,
+      stencilFail: THREE.ReplaceStencilOp,
+      stencilZFail: THREE.ReplaceStencilOp,
+      stencilZPass: THREE.ReplaceStencilOp});
+    capPlane = new THREE.Mesh(g, m);
+    capPlane.renderOrder = 3;
+    capPlane.visible = false;
+    // The cap must not be clipped by the very plane it fills, and it must not be
+    // pickable -- a click on the section should still reach the geometry behind.
+    capPlane.raycast = () => {};
+    scene.add(capPlane);
+
+    // One stencil pair per part, sharing the part's geometry.
+    parts.forEach(p => {
+      if (p.isGhost) return;
+      const mk = (side, zpass) => {
+        const mm = new THREE.MeshBasicMaterial();
+        mm.depthWrite = false; mm.depthTest = false;
+        mm.colorWrite = false; mm.stencilWrite = true;
+        mm.stencilFunc = THREE.AlwaysStencilFunc;
+        mm.side = side;
+        mm.clippingPlanes = [clip];
+        mm.stencilFail = THREE.KeepStencilOp;
+        mm.stencilZFail = zpass;
+        mm.stencilZPass = zpass;
+        const o = new THREE.Mesh(p.mesh.geometry, mm);
+        o.renderOrder = 1;
+        o.raycast = () => {};
+        capStencil.push({obj: o, src: p});
+        scene.add(o);
+        return o;
+      };
+      mk(THREE.BackSide, THREE.IncrementWrapStencilOp);
+      mk(THREE.FrontSide, THREE.DecrementWrapStencilOp);
+    });
+  }
+
+  function syncCap() {
+    const on = document.getElementById('cadcap').checked
+               && parseInt(axisSel.value, 10) >= 0;
+    if (on) buildCap();
+    if (!capPlane) return;
+    capPlane.visible = on;
+    // A stencil helper follows the visibility of the part it stands for, or a
+    // hidden part would still punch a hole in the cap.
+    capStencil.forEach(s => { s.obj.visible = on && s.src.mesh.visible; });
+    if (!on) return;
+    // Sit the quad on the clip plane, big enough to cover the model from any angle.
+    const n = clip.normal, d = -clip.constant;
+    capPlane.position.copy(n).multiplyScalar(d);
+    capPlane.lookAt(capPlane.position.clone().add(n));
+    const s = (sphere ? sphere.radius : 1) * 4;
+    capPlane.scale.set(s, s, 1);
+  }
+  document.getElementById('cadcap').onchange = syncCap;
+
+  // ---- explode -------------------------------------------------------------
+  // Pull the parts apart along the radius, which is the axis they are stacked on:
+  // bond, then grits, then the workpiece outside them. Standard CAD, and here it
+  // is the quickest way to see that the grits really do stand proud of the bond
+  // and that the block sits clear of both.
+  const EXPLODE_ORDER = {bond_rim: -1.0, abrasive_grits: 0.35, workpiece: 1.0};
+  function applyExplode() {
+    const r = document.getElementById('cadexplode');
+    const t = Number(r.value) / 100.0;
+    const span = deckBox ? deckBox.getSize(new THREE.Vector3()).length() : 1;
+    parts.forEach(p => {
+      let k = EXPLODE_ORDER[p.name];
+      if (k === undefined) k = p.isGhost ? 0.0 : 0.35;
+      p.mesh.position.copy(FACE).multiplyScalar(t * k * span * 0.55);
+    });
+    // The stencil helpers shadow their parts, so they have to move with them or
+    // the cap is punched by geometry that is no longer there.
+    capStencil.forEach(s2 => { s2.obj.position.copy(s2.src.mesh.position); });
+    const txt = document.getElementById('cadexplodetxt');
+    if (txt) {
+      txt.textContent = t <= 0 ? 'assembled'
+        : 'exploded ' + (t * span * 0.55 * 1000).toFixed(0) + ' um along the radius';
+    }
+  }
+  document.getElementById('cadexplode').oninput = applyExplode;
 
   // ---- pick a grain, and measure -----------------------------------------
   const ray = new THREE.Raycaster();
@@ -786,6 +1138,7 @@ try {
       engageMesh.visible = false;
       gritMesh.add(engageMesh);
     }
+    setupColourBy();
 
     // the panel
     const box = document.getElementById('cadbclist');
@@ -819,16 +1172,167 @@ try {
       showEngage = e.target.checked;
       if (engageMesh) engageMesh.visible = showEngage;
     };
-    const det = document.createElement('div');
+    // The detail is one full sentence per boundary condition, read out of the deck.
+    // Left open it is the single thing that overflows the 206 px column -- five
+    // items push the panel past the bottom of the viewer and the last one is cut
+    // off mid-word. Fold it behind a disclosure: the checkboxes above are the
+    // control, this is the evidence, and evidence can be asked for.
+    //
+    // A warning note is different: it is the reason a run would be wasted, so it
+    // stays outside the fold and stays red.
+    const det = document.createElement('details');
     det.style.cssText = 'margin-top:5px;color:#5a636c;font-size:11px';
-    det.innerHTML = BCSPEC.items.map(it =>
+    const sum = document.createElement('summary');
+    sum.textContent = 'what each one writes (' + BCSPEC.items.length + ')';
+    sum.style.cssText = 'cursor:pointer;user-select:none;color:#39424b';
+    det.appendChild(sum);
+    const body = document.createElement('div');
+    body.style.cssText = 'max-height:190px;overflow:auto;margin-top:3px';
+    body.innerHTML = BCSPEC.items.map(it =>
       '<div style="margin-bottom:3px"><b style="color:' + hexOf(it.kind) + '">' +
-      it.label + '</b> ' + it.detail + '</div>').join('') +
-      (BCSPEC.notes.length
-        ? '<div style="color:#b00">' + BCSPEC.notes.join(' ') + '</div>' : '');
+      it.label + '</b> ' + esc(it.detail) + '</div>').join('');
+    det.appendChild(body);
     box.appendChild(det);
+    if (BCSPEC.notes.length) {
+      const n = document.createElement('div');
+      n.style.cssText = 'color:#b00;font-size:11px;margin-top:4px';
+      n.textContent = BCSPEC.notes.join(' ');
+      box.appendChild(n);
+    }
   }
   let engageMesh = null, showEngage = false, rotCheck = null;
+
+  // ---- colour the grains by a measured property ----------------------------
+  // Every grain's numbers are already in META, and the grits are ONE merged mesh
+  // with a triangle range per grain -- the same ranges picking and the engage
+  // highlight use. So a per-vertex colour attribute painted over those ranges
+  // turns the wheel into a map of the dressing, which is otherwise only visible
+  // one grain at a time by clicking. Vertices are not shared between grains in
+  // the merged mesh, so writing per grain cannot bleed into its neighbour.
+
+  // Viridis, sampled. Perceptually uniform and legible in greyscale, unlike the
+  // rainbow a viewer usually reaches for; matches what the Python figures use.
+  const VIRIDIS = [[0.267,0.005,0.329],[0.283,0.141,0.458],[0.254,0.265,0.530],
+                   [0.207,0.372,0.553],[0.164,0.471,0.558],[0.128,0.567,0.551],
+                   [0.135,0.659,0.518],[0.267,0.749,0.441],[0.478,0.821,0.318],
+                   [0.741,0.873,0.150],[0.993,0.906,0.144]];
+  function viridis(t) {
+    t = Math.max(0, Math.min(1, t));
+    const x = t * (VIRIDIS.length - 1), i = Math.min(Math.floor(x),
+                                                     VIRIDIS.length - 2);
+    const f = x - i, a = VIRIDIS[i], b = VIRIDIS[i + 1];
+    return [a[0] + f * (b[0] - a[0]), a[1] + f * (b[1] - a[1]),
+            a[2] + f * (b[2] - a[2])];
+  }
+
+  function setupColourBy() {
+    const sel = document.getElementById('cadcolour');
+    if (!sel) return;
+    if (!gritMesh || !(META.grains || []).length) {
+      sel.disabled = true;
+      sel.title = 'no per-grain data in this view';
+      return;
+    }
+    sel.onchange = () => paintColour(sel.value);
+  }
+
+  function paintColour(key) {
+    const leg = document.getElementById('cadlegend');
+    // Both grit meshes, so a dense wheel -- where most grains are box proxies in
+    // the far mesh -- colours all the way out instead of only near the contact.
+    const targets = [[gritMesh, META.grains || []],
+                     [farMesh, META.grains_far || []]].filter(t => t[0]);
+    if (!targets.length) return;
+
+    if (key === 'none') {
+      targets.forEach(([m]) => {
+        const b = m.userData.baseColour;
+        if (b !== undefined) m.material.color.setHex(b);
+        m.material.vertexColors = false;
+        m.material.needsUpdate = true;
+      });
+      leg.style.display = 'none';
+      return;
+    }
+
+    // One scale across BOTH meshes: colouring each to its own range would make a
+    // near grain and a far grain of the same size different colours, which is
+    // exactly the comparison the map exists to support.
+    const all = (META.grains || []).concat(META.grains_far || []);
+    const grainsAll = all;
+
+    // Boolean and continuous are different questions and deserve different
+    // encodings: a two-value viridis ramp reads as "a bit more of something".
+    const boolean = (key === 'engage');
+    let lo = Infinity, hi = -Infinity;
+    if (!boolean) {
+      grainsAll.forEach(g => {
+        const v = g[key];
+        if (typeof v === 'number' && isFinite(v)) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      });
+      if (!isFinite(lo)) { lo = 0; hi = 1; }
+      if (hi - lo < 1e-12) hi = lo + 1e-12;
+    }
+
+    targets.forEach(([mesh, grains]) => {
+      const geom = mesh.geometry, mat = mesh.material;
+      if (mesh.userData.baseColour === undefined) {
+        mesh.userData.baseColour = mat.color.getHex();
+      }
+      const n = geom.attributes.position.count;
+      let attr = geom.getAttribute('color');
+      if (!attr || attr.count !== n) {
+        attr = new THREE.BufferAttribute(new Float32Array(n * 3), 3);
+        geom.setAttribute('color', attr);
+      }
+      const idx = geom.index ? geom.index.array : null;
+      const arr = attr.array;
+      arr.fill(0.72);                     // anything not covered stays neutral grey
+      grains.forEach(g => {
+        let c;
+        if (boolean) c = g.engage ? [0.88, 0.23, 0.23] : [0.62, 0.66, 0.70];
+        else {
+          const v = g[key];
+          c = (typeof v === 'number' && isFinite(v))
+            ? viridis((v - lo) / (hi - lo)) : [0.72, 0.72, 0.72];
+        }
+        for (let k = g.tri0 * 3; k < (g.tri0 + g.ntri) * 3; k++) {
+          const vi = idx ? idx[k] : k;
+          arr[vi * 3] = c[0]; arr[vi * 3 + 1] = c[1]; arr[vi * 3 + 2] = c[2];
+        }
+      });
+      attr.needsUpdate = true;
+      mat.vertexColors = true;
+      mat.color.setHex(0xffffff);         // white, or the tint multiplies through
+      mat.needsUpdate = true;
+    });
+
+    // Legend
+    leg.style.display = 'block';
+    const bar = document.getElementById('cadlegbar');
+    if (boolean) {
+      bar.style.background = 'linear-gradient(90deg,#9ea9b3 0 50%%,#e03a3a 50%% 100%%)';
+      document.getElementById('cadleglo').textContent = 'no';
+      document.getElementById('cadleghi').textContent = 'engages';
+    } else {
+      const stops = [];
+      for (let i = 0; i <= 10; i++) {
+        const c = viridis(i / 10);
+        stops.push('rgb(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255)
+                   + ',' + Math.round(c[2] * 255) + ') ' + (i * 10) + '%%');
+      }
+      bar.style.background = 'linear-gradient(90deg,' + stops.join(',') + ')';
+      const unit = key === 'volume_um3' ? ' um3' : ' um';
+      const fmt = v => (Math.abs(v) >= 100 ? v.toFixed(0)
+                        : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2));
+      document.getElementById('cadleglo').textContent = fmt(lo) + unit;
+      document.getElementById('cadleghi').textContent = fmt(hi) + unit;
+    }
+  }
+
   function hexOf(k) {
     return '#' + (BCCOL[k] || 0x666666).toString(16).padStart(6, '0');
   }
@@ -1291,8 +1795,27 @@ try {
       '<div id="cadbandpin" style="position:absolute;top:-2px;width:2px;height:15px;' +
       'background:#12365e"></div></div>' +
       '<input type="range" id="cadbandrange" min="0" max="1000" value="0" ' +
-      'style="width:100%%;margin:2px 0 0">' +
+      'style="width:100%%;margin:2px 0 0" title="drag to set the depth of cut">' +
       '<div id="cadbandtext" style="font-size:10px;color:#5a636c"></div>';
+    // The slider was painted from paintBand but had no handler, so dragging it moved
+    // the thumb, changed nothing, and then snapped back on the next repaint. Drive
+    // the same field the number input drives, through the same EDITED bookkeeping.
+    const r = wrap.querySelector('#cadbandrange');
+    const push = (commit) => {
+      const um = Number(r.value) / 1000.0;
+      const key = 'depth_of_cut_um';
+      if (um === EDIT.settings[key]) delete EDITED[key];
+      else EDITED[key] = um;
+      const num = document.getElementById('cadedit_' + key);
+      if (num) num.value = String(Number(um.toPrecision(10)));
+      // Repaint the band and the state on every move so the pin tracks the thumb,
+      // but only re-preview the geometry on release: applyLive() re-seats the drawn
+      // block and is far too heavy to run on every pixel of a drag.
+      paintBand();
+      if (commit) applyLive(); else paintEditState();
+    };
+    r.oninput = () => push(false);
+    r.onchange = () => push(true);
     return wrap;
   }
 
@@ -1325,7 +1848,10 @@ try {
     t.style.opacity = stale ? '0.35' : '1';
     const r = document.getElementById('cadbandrange');
     r.max = String(Math.round(full * 1000));
-    r.value = String(Math.round(ae * 1000));
+    // Writing value back while the user is dragging fights the thumb: paintBand runs
+    // on every input event, so the slider would jump back to the last committed
+    // number mid-drag. The thumb is already where the user put it.
+    if (document.activeElement !== r) r.value = String(Math.round(ae * 1000));
   }
 
   // ---- dragging the block --------------------------------------------------
@@ -1505,6 +2031,24 @@ try {
     parts.forEach(p => {
       p.mesh.visible = p.wanted && (!p.isGhost || on);
     });
+    placeWhere(on);
+  }
+
+  // The "you are here" callout follows the same rule as the ghost: it is a hint for
+  // when the contact is too small to see, and an obstruction once you have arrived.
+  function placeWhere(far) {
+    const el = document.getElementById('cadwhere');
+    if (!el) return;
+    if (!far || !CONTACT) { el.style.display = 'none'; return; }
+    const v = CONTACT.clone().project(cam);
+    // Behind the camera, or off screen: nothing useful to point at.
+    if (v.z > 1 || Math.abs(v.x) > 1.06 || Math.abs(v.y) > 1.06) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = 'block';
+    el.style.left = ((v.x * 0.5 + 0.5) * wrap.clientWidth) + 'px';
+    el.style.top = ((-v.y * 0.5 + 0.5) * wrap.clientHeight) + 'px';
   }
 
   function render() {

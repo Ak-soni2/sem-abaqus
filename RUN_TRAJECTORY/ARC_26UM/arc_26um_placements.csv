@@ -1,0 +1,2 @@
+placement_id,shape_index,x_mm,y_mm,z_mm,theta_deg,radius_mm,protrusion_um,rot_axis_x,rot_axis_y,rot_axis_z,rot_angle_deg
+1,0,24.582024680,4.537774727,0.000000000,10.458906,24.997347,31.3292,0.629986,0.459566,0.626033,129.8021

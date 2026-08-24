@@ -33,6 +33,27 @@ from skimage.segmentation import watershed
 
 from .metrology import SemImage
 
+# What ``segment_grains(..., stages=d)`` puts in ``d``, in pipeline order.
+# Each is otherwise a local that is discarded on return, so without this the
+# segmentation can only be reported as a grain count -- there is no way to show
+# that the thresholding, the seeding or the split-retention did the right thing.
+STAGE_KEYS = (
+    "raw",               # uint8, the micrograph with the databar cropped off
+    "denoised",          # after median / bilateral / background flattening
+    "threshold_raw",     # bool, straight out of multi-Otsu, before morphology
+    "morphology",        # bool, after close then open
+    "foreground",        # bool, after hole filling -- Segmentation.foreground
+    "distance_um",       # float32 Euclidean distance inside the foreground
+    "seeds",             # int, h-maxima seed regions (one per expected grain)
+    "gradient",          # Sobel magnitude of the denoised image
+    "elevation",         # -distance + gradient_weight*gradient, the watershed input
+    "watershed_raw",     # int32 labels BEFORE weak splits are merged back
+    "boundary_evidence", # {(a,b): {edge_strength, neck_ratio, n_px, kept}}
+    "merged",            # int32 labels after merging, before area filtering
+    "labels",            # int32 final labels -- Segmentation.labels
+    "border_labels",     # set of label ids touching the frame edge
+)
+
 
 @dataclass
 class SegmentationParams:
@@ -308,12 +329,27 @@ def _merge_unsupported_splits(
 
 
 def segment_grains(
-    sem: SemImage, params: Optional[SegmentationParams] = None
+    sem: SemImage, params: Optional[SegmentationParams] = None,
+    stages: Optional[dict] = None,
 ) -> Segmentation:
-    """Segment individual grains from a calibrated SEM image."""
+    """Segment individual grains from a calibrated SEM image.
+
+    Pass a dict as ``stages`` to have every intermediate stored into it under
+    the keys listed in :data:`STAGE_KEYS`. Nine of the eleven steps below are
+    otherwise locals that vanish on return, which makes the segmentation
+    impossible to show and therefore impossible to argue with. Capturing is
+    opt-in and costs nothing when ``stages`` is None -- no array is copied that
+    was not going to be built anyway.
+    """
     params = params or SegmentationParams()
+    keep = stages is not None
+
+    def _stage(name, value):
+        if keep:
+            stages[name] = value
     ps = sem.pixel_size_um
     img = sem.intensity
+    _stage("raw", img)
 
     # ---- 1. denoise ------------------------------------------------------
     work = img
@@ -328,9 +364,11 @@ def segment_grains(
     # ---- 2. optional illumination flattening -----------------------------
     if params.background_percentile > 0:
         work = _flatten_background(work, sigma_px=params.background_percentile / ps)
+    _stage("denoised", work)
 
     # ---- 3. threshold ----------------------------------------------------
     fg, thresholds = _threshold(work, params)
+    _stage("threshold_raw", fg.copy() if keep else fg)
 
     # ---- 4. morphological cleanup ---------------------------------------
     def ellipse(microns: float) -> Optional[np.ndarray]:
@@ -348,12 +386,16 @@ def segment_grains(
         fg_u8 = cv2.morphologyEx(fg_u8, cv2.MORPH_OPEN, se_open)
     fg = fg_u8.astype(bool)
 
+    _stage("morphology", fg.copy() if keep else fg)
+
     hole_px = max(int(round(params.fill_holes_um2 / (ps * ps))), 1)
     fg = remove_small_holes(fg, hole_px)
+    _stage("foreground", fg)
 
     # ---- 5. distance transform ------------------------------------------
     dist_px = cv2.distanceTransform(fg.astype(np.uint8), cv2.DIST_L2, 5)
     dist_um = (dist_px * ps).astype(np.float32)
+    _stage("distance_um", dist_um)
 
     # ---- 6. seeds --------------------------------------------------------
     # h-maxima on the distance map: a peak must rise h above its surroundings
@@ -373,6 +415,7 @@ def segment_grains(
             seeds_mask[tuple(coords.T)] = True
 
     seeds, n_seeds = ndimage.label(seeds_mask)
+    _stage("seeds", seeds)
 
     # ---- 7. watershed on a continuous elevation map ----------------------
     # -distance carves basins at grain centres and ridges at the necks between
@@ -384,6 +427,9 @@ def segment_grains(
         g_norm = grad / max(float(grad.max()), 1e-9)
         elevation = elevation + params.gradient_weight * g_norm
 
+    _stage("gradient", grad)
+    _stage("elevation", elevation)
+
     labels = watershed(
         elevation,
         markers=seeds,
@@ -391,11 +437,21 @@ def segment_grains(
         compactness=params.compactness,
         watershed_line=False,
     ).astype(np.int32)
+    _stage("watershed_raw", labels.copy() if keep else labels)
 
     # ---- 8. drop splits the image does not support -----------------------
     n_merged = 0
+    if keep:
+        # The keep/merge verdict per boundary, which is the one segmentation
+        # decision a reader is entitled to see argued rather than asserted.
+        ev = boundary_evidence(labels, grad, dist_um)
+        stages["boundary_evidence"] = {
+            k: dict(v, kept=bool(v["edge_strength"] >= params.min_edge_strength
+                                 or v["neck_ratio"] <= params.min_neck_ratio))
+            for k, v in ev.items()}
     if params.merge_weak_boundaries:
         labels, n_merged = _merge_unsupported_splits(labels, grad, dist_um, params)
+    _stage("merged", labels.copy() if keep else labels)
 
     # ---- 9. filter regions ----------------------------------------------
     min_area_px = max(int(round(params.min_area_um2 / (ps * ps))), 1)
@@ -423,6 +479,8 @@ def segment_grains(
         for edge in (out[0, :], out[-1, :], out[:, 0], out[:, -1]):
             border.update(int(v) for v in np.unique(edge) if v != 0)
 
+    _stage("labels", out)
+    _stage("border_labels", border)
     return Segmentation(
         labels=out,
         foreground=fg,

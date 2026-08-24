@@ -145,9 +145,16 @@ def main():
     on_disk = sorted(glob.glob('semgrit/*.py')) + ['verify_rigid_deck.py',
                                                    'verify_rigid_deck2.py',
                                                    'verify_pipeline_A.py']
-    chk('payload contains every package file',
-        sorted(members) == sorted(f.replace(os.sep, '/') for f in on_disk),
-        '%d files' % len(members))
+    # A SUPERSET, not an exact match: the notebook also ships semgrit_multi, the
+    # subroutines and the hybrid test driver, and this list only enumerates the
+    # package plus the three geometry gates. Demanding equality made the check fail
+    # every time the payload legitimately grew, which is the opposite of useful --
+    # what matters is that nothing the notebook needs is absent.
+    want = sorted(f.replace(os.sep, '/') for f in on_disk)
+    absent = [f for f in want if f not in members]
+    chk('payload contains every package file', not absent,
+        '%d files, %s' % (len(members),
+                          'none missing' if not absent else 'MISSING %s' % absent[:4]))
     stale = [f for f in on_disk
              if open(f, 'rb').read() != open(os.path.join(OUT, f), 'rb').read()]
     # The single most likely way this notebook breaks: the package is edited and the
@@ -185,8 +192,12 @@ def main():
                 imported |= {a.name.split('.')[0] for a in n.names}
             elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
                 imported.add(n.module.split('.')[0])
+    # mpl_toolkits ships inside matplotlib -- there is no separate distribution to
+    # pip install -- so requiring it in the setup cell would be asking for a package
+    # that does not exist. matplotlib itself is checked, which is the real
+    # dependency. Exempted for the same reason as the Abaqus kernel modules.
     third = sorted(m for m in imported - STDLIB
-                   if m not in {'abaqus', 'abaqusConstants'})
+                   if m not in {'abaqus', 'abaqusConstants', 'mpl_toolkits'})
     setup_cell = next(c for c in cells if 'pip' in c and 'missing' in c)
     ensured = set(re.findall(r'\("([A-Za-z_0-9]+)",\s*"[^"]+"\)', setup_cell))
     gap = [m for m in third if m not in ensured]

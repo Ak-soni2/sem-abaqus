@@ -158,6 +158,19 @@ transition rather than a line drawn in advance.
 
 **Nothing in the single-abrasive notebook, in `semgrit/`, or in
 `vumat_grind.for` is modified by any of this.** Run the cells top to bottom.
+
+## The cells
+
+| | |
+|---|---|
+| **1-2** | setup, and point at your SEM images |
+| **3** | measure the grains |
+| **3b** | **what happened to the image** -- the calibration cross-check, all twelve segmentation stages, the measured grain population, real outlines against convex hulls, and every solid verified against closed-form geometry. Drawn for *your* images and *your* settings; this is the evidence for a paper. |
+| **4** | settings |
+| **5** | sweep the field and look at it: the trajectories, the groove, the chip thickness against `dc`, the field through the depth, and how the split moves with the depth of cut |
+| **5b** | optional: replay a measured trajectory |
+| **6** | build it, inject the field, verify it |
+| **7** | optional: check the subroutines themselves |
 """))
 
 CELLS.append(code('''
@@ -253,15 +266,125 @@ CELLS.append(code('''
 #@markdown Identical to the companion notebook: the pixel size comes from the
 #@markdown Zeiss metadata, the segmentation settings are the tuned ones, and the
 #@markdown library is cached so re-running a wheel change costs nothing.
+#@markdown
+#@markdown `KEEP_STAGES` additionally keeps every intermediate of the segmentation, so
+#@markdown cell **3b** can draw what the pipeline did to your image -- the calibration
+#@markdown cross-check, the twelve segmentation stages, the measured population, and
+#@markdown every solid's verification against closed-form geometry. It costs memory and
+#@markdown forces a fresh measurement, so untick it when only the wheel is changing.
+KEEP_STAGES = True   #@param {type:"boolean"}
+
 import os
 from semgrit.quick import SIMPLE_MEASURE, library_summary, measure_images
 
 need("IMAGES", "cell 2")
 OUT_MEAS = os.path.join(WORK, "1_measurements")
-MEASURED = measure_images(IMAGES, OUT_MEAS, pixel_size_um=0.0, **SIMPLE_MEASURE)
+MEASURED = measure_images(IMAGES, OUT_MEAS, pixel_size_um=0.0,
+                          keep_stages=KEEP_STAGES, **SIMPLE_MEASURE)
 SOLIDS, ALL_GRAINS = MEASURED["solids"], MEASURED["grains"]
+PER_IMAGE = MEASURED.get("per_image") or []
 print()
 LIB = library_summary(SOLIDS)
+if PER_IMAGE:
+    print()
+    print("  %d image(s) kept their stages - run cell 3b to see them" % len(PER_IMAGE))
+'''))
+
+CELLS.append(code('''
+#@title 3b - What happened to the SEM image { display-mode: "form" }
+#@markdown Every stage of the measurement, drawn for the image you just measured. These
+#@markdown are the figures a paper needs: the calibration that every later length scales
+#@markdown with, the twelve segmentation stages including the split-retention argument,
+#@markdown the measured grain population, what a convex hull would have erased, and the
+#@markdown per-grain verification against closed-form geometry.
+#@markdown
+#@markdown A segmentation panel is about 2 MB, so one image is drawn at a time.
+IMAGE_INDEX = 0        #@param {type:"integer"}
+ALL_IMAGES = False     #@param {type:"boolean"}
+SHOW_ANALYSIS = True   #@param {type:"boolean"}
+GALLERY_GRAINS = 8     #@param {type:"integer"}
+
+# Imported at the top level of the cell, never inside the `if`. The headless
+# notebook test rewrites the pyplot import by prepending two unindented lines to
+# it, and inside an indented block that is an IndentationError.
+import matplotlib.pyplot as plt
+from semgrit import figures as F
+from semgrit.measure import grain_statistics
+
+# Bound, not wrapped: the same test rewrites an indented show call into code
+# referencing a `fig` local, which a one-line wrapper would inherit in a cell
+# that has no such variable.
+_show = plt.show
+
+if SHOW_ANALYSIS:
+    if not PER_IMAGE:
+        raise SystemExit("no captured stages: tick KEEP_STAGES in cell 3 and re-run "
+                         "it. A cache hit also returns none.")
+    _sel = PER_IMAGE if ALL_IMAGES else [
+        PER_IMAGE[max(0, min(int(IMAGE_INDEX), len(PER_IMAGE) - 1))]]
+
+    print("images measured:")
+    for _i, _r in enumerate(PER_IMAGE):
+        print("  [%d] %-24s %4d grains -> %3d solids  %.5f um/px"
+              % (_i, _r["name"], len(_r["grains"]), len(_r["solids"]),
+                 _r["sem"].pixel_size_um))
+
+    for rec in _sel:
+        sem, seg, st = rec["sem"], rec["seg"], rec["stages"]
+        ev = (st or {}).get("boundary_evidence") or {}
+        kept = sum(1 for v in ev.values() if v["kept"])
+        stats = grain_statistics(rec["grains"], sem, interior_only=True)
+        good = [r for r in rec["reports"] if r.get("ok")]
+
+        print()
+        print("=" * 78)
+        print("%s" % rec["name"])
+        print("=" * 78)
+        print("  1 CALIBRATION")
+        print("    pixel size      : %.5f um/px  from %s"
+              % (sem.pixel_size_um, sem.pixel_size_source))
+        if sem.scalebar_agreement is not None:
+            _a = 100 * sem.scalebar_agreement
+            print("    metadata vs bar : %+.2f %%  -> %s"
+                  % (_a, "agree (5 % tolerance)" if abs(_a) <= 5 else "DISAGREE"))
+        print("    field of view   : %.1f x %.1f um" % (sem.width_um, sem.height_um))
+        print("  2 SEGMENTATION")
+        print("    %d seeds -> %d watershed regions -> %d grains"
+              % (seg.n_seeds, st["watershed_raw"].max(), seg.n_grains))
+        print("    %d shared boundaries: %d kept, %d merged back"
+              % (len(ev), kept, len(ev) - kept))
+        print("  3 MEASUREMENT")
+        print("    %d grains, %d border-truncated and excluded"
+              % (stats["n_grains_total"], stats["n_grains_border"]))
+        _d = stats["equivalent_diameter_um"]
+        if _d.get("n"):
+            print("    equivalent diameter d10/d50/d90 : %.2f / %.2f / %.2f um"
+                  % (_d["d10"], _d["d50"], _d["d90"]))
+        print("  4 3-D SOLIDS")
+        print("    %d verified, %d rejected"
+              % (len(good), len(rec["reports"]) - len(good)))
+        if good:
+            print("    worst mesh-vs-analytic volume error : %.2e relative"
+                  % max(abs(r["volume_rel_error"]) for r in good))
+            print("    worst section-vs-outline error      : %.2e relative"
+                  % max(abs(r["projected_area_rel_error"]) for r in good))
+        print()
+
+        for _fn in (lambda: F.calibration(rec),
+                    lambda: F.segmentation_stages(rec),
+                    lambda: F.segmentation_overlay(rec),
+                    lambda: F.measurement_distributions(rec["grains"]),
+                    lambda: F.outline_fidelity(rec),
+                    lambda: F.solid_verification(rec),
+                    lambda: F.grain_gallery(rec["solids"],
+                                            n=max(1, int(GALLERY_GRAINS)))):
+            try:
+                _fn()
+                _show()
+            except Exception as _exc:
+                print("  (a figure could not be drawn: %s)" % _exc)
+else:
+    print("analysis figures skipped - tick SHOW_ANALYSIS")
 '''))
 
 CELLS.append(code('''

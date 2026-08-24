@@ -175,6 +175,26 @@ class HybridParams:
     hybrid deck can be run as a pure-JC or pure-JH-2 deck without rebuilding
     it, which is how you find out how much of a result the switch caused."""
 
+    # ---- prescribing the trajectory directly ---------------------------
+    # Normally H0 and HG are DERIVED from where the grit was seated and how fast
+    # the wheel feeds in, and that derivation is the thing that keeps the card
+    # honest -- it cannot disagree with the geometry the deck writes.
+    #
+    # These two exist for the case where the trajectory is the specification
+    # rather than the consequence: "cut this exact profile", from a measured
+    # groove or a figure in a paper. Setting either one overrides that term of
+    # h(u) = H0 + HG*u - u^2/(2*RTIP) and the deck says so in its own header, so
+    # a reader can see the number was imposed rather than derived.
+    #
+    # RTIP is deliberately NOT overridable: it is the grit's real radius on the
+    # real wheel, and letting it be typed would allow a curvature no wheel in
+    # the model has.
+    h0_override_mm: Optional[float] = None
+    """Peak/offset term of h(u). None leaves it derived from the seating."""
+    hg_override: Optional[float] = None
+    """Wedge slope of h(u). None leaves it derived from the infeed. Zero is a
+    real value here and means a pure arc: no infeed, depth from curvature."""
+
     placeholder: bool = True
     """True means the ductile constants have not been calibrated for this
     material and the deck should say so, loudly, in its own header."""
@@ -262,9 +282,13 @@ class ChipField:
     h_entry_mm: float       # chip thickness where the grit meets the block
     h_exit_mm: float        # and where it leaves
     transition_u_mm: Optional[float] = None
-    """Station where h crosses dc, if the crossing lies inside the block. This
-    is the number the whole model exists to produce: the point along the
+    """FIRST station where h crosses dc, if any crossing lies inside the block.
+    This is the number the whole model exists to produce: the point along the
     scratch where removal stops being ductile."""
+    transition_all_mm: tuple = ()
+    """Every crossing, not just the first. A prescribed arc that rises above dc
+    and comes back down crosses twice, and a header that mentioned only one of
+    them would describe half the experiment."""
 
     def h_at(self, u: float) -> float:
         h = self.h0_mm + self.hg * u
@@ -275,7 +299,9 @@ class ChipField:
 
 def chip_field(place: dict, motion: Optional[dict], wp,
                *, rotation_reversed: bool = False,
-               dc_mm: float = 0.0) -> ChipField:
+               dc_mm: float = 0.0,
+               h0_override: Optional[float] = None,
+               hg_override: Optional[float] = None) -> ChipField:
     """Work out H0, HG and RTIP for the grit this deck actually placed.
 
     ``place`` is :func:`semgrit.rigid_wheel.place_workpiece`'s output and
@@ -329,6 +355,11 @@ def chip_field(place: dict, motion: Optional[dict], wp,
     hg = -way * v_r / v_s
     h0 = h_gov - hg * u_gov + (u_gov * u_gov / (2.0 * rtip) if rtip > 0 else 0.0)
 
+    if h0_override is not None:
+        h0 = float(h0_override)
+    if hg_override is not None:
+        hg = float(hg_override)
+
     fld = ChipField(theta_c=float(place["theta_c"]), h0_mm=h0, hg=hg,
                     rtip_mm=rtip, u_gov_mm=u_gov,
                     h_entry_mm=0.0, h_exit_mm=0.0)
@@ -338,33 +369,64 @@ def chip_field(place: dict, motion: Optional[dict], wp,
     fld.h_entry_mm = fld.h_at(u_entry)
     fld.h_exit_mm = fld.h_at(-u_entry)
     if dc_mm > 0:
-        fld.transition_u_mm = _transition_station(fld, -hb, hb, dc_mm)
+        st = transition_stations(fld, -hb, hb, dc_mm)
+        fld.transition_all_mm = tuple(st)
+        fld.transition_u_mm = st[0] if st else None
     return fld
+
+
+def transition_stations(fld: ChipField, u_lo: float, u_hi: float,
+                        dc: float, samples: int = 2001) -> list:
+    """EVERY station in [u_lo, u_hi] where h(u) crosses dc, in order.
+
+    h(u) = H0 + HG*u - u^2/(2*RTIP) is a downward parabola, so it can cross a
+    level twice. For a deck whose depth comes from a radial infeed the linear
+    term dominates over a block far shorter than the wheel radius, h is monotone
+    in practice, and a single bisection between the two ends is right -- which
+    is what this function used to do, and why it only ever returned one station.
+
+    That assumption fails the moment the profile is prescribed rather than fed
+    in. An arc that starts at zero depth, peaks above dc and returns to zero
+    crosses dc twice and has EQUAL h at both ends, so an endpoint test sees no
+    sign change at all and reports "never crosses" -- the confident wrong answer
+    a deck header should never give. Scanning for sign changes and refining each
+    one costs a few thousand evaluations of a quadratic and cannot miss a root
+    the sampling resolves.
+    """
+    if samples < 3:
+        samples = 3
+    span = u_hi - u_lo
+    us = [u_lo + span * i / (samples - 1) for i in range(samples)]
+    fs = [fld.h_at(u) - dc for u in us]
+    out = []
+    for i in range(samples):
+        if fs[i] == 0.0:
+            out.append(us[i])
+            continue
+        if i == 0:
+            continue
+        if fs[i - 1] * fs[i] < 0.0:
+            lo, hi, f_lo = us[i - 1], us[i], fs[i - 1]
+            for _ in range(120):
+                mid = 0.5 * (lo + hi)
+                if (fld.h_at(mid) - dc > 0.0) == (f_lo > 0.0):
+                    lo = mid
+                else:
+                    hi = mid
+            out.append(0.5 * (lo + hi))
+    return out
 
 
 def _transition_station(fld: ChipField, u_lo: float, u_hi: float,
                         dc: float) -> Optional[float]:
-    """Where h(u) = dc inside [u_lo, u_hi], or None if it never does.
+    """The FIRST station where h(u) crosses dc, or None.
 
-    h is monotone in u over a block far shorter than the wheel radius (the
-    linear term dominates the parabola by orders of magnitude), so a bisection
-    is exact enough and cannot pick the wrong root.
+    Kept for the callers that want a single number -- notably the one field on
+    :class:`ChipField`. Use :func:`transition_stations` when the profile may be
+    non-monotone; this returns only the earliest of however many there are.
     """
-    f_lo, f_hi = fld.h_at(u_lo) - dc, fld.h_at(u_hi) - dc
-    if f_lo == 0.0:
-        return u_lo
-    if f_hi == 0.0:
-        return u_hi
-    if (f_lo > 0) == (f_hi > 0):
-        return None
-    lo, hi = u_lo, u_hi
-    for _ in range(200):
-        mid = 0.5 * (lo + hi)
-        if (fld.h_at(mid) - dc > 0) == (f_lo > 0):
-            lo = mid
-        else:
-            hi = mid
-    return 0.5 * (lo + hi)
+    st = transition_stations(fld, u_lo, u_hi, dc)
+    return st[0] if st else None
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +501,9 @@ def plan_hybrid(plan: dict, p: Optional[HybridParams] = None):
     motion = wheel_motion(an2, plan["_place"]["theta_c"],
                           pr.surface_speed_mm_s, pr.outer_radius_mm, step_time)
     fld = chip_field(plan["_place"], motion, plan["_wp"],
-                     rotation_reversed=bool(an.rotation_reversed), dc_mm=dc)
+                     rotation_reversed=bool(an.rotation_reversed), dc_mm=dc,
+                     h0_override=getattr(p, "h0_override_mm", None),
+                     hg_override=getattr(p, "hg_override", None))
     return fld, dc
 
 
@@ -524,18 +588,48 @@ def write_hybrid_material(w, p: HybridParams, wp, jh2_constants,
         w("** h(u) = H0 + HG*u - u^2/(2*RTIP), u = tangential station in mm\n")
         w("**   theta_c %.9f rad, H0 %.9e mm, HG %.9e, RTIP %.6f mm\n"
           % (fld.theta_c, fld.h0_mm, fld.hg, fld.rtip_mm))
+        # Say which terms were imposed. A derived H0 is a consequence of
+        # the seating and can be checked against it; an imposed one is a
+        # specification and cannot. A reader is entitled to know which.
+        imposed = []
+        if getattr(p, "h0_override_mm", None) is not None:
+            imposed.append("H0")
+        if getattr(p, "hg_override", None) is not None:
+            imposed.append("HG")
+        if imposed:
+            w("**   %s PRESCRIBED, not derived from seating and infeed:\n"
+              % " and ".join(imposed))
+            w("**   this deck cuts a SPECIFIED trajectory. The geometry\n")
+            w("**   is still the real one; only the depth profile was\n")
+            w("**   imposed.\n")
         w("**   h at the entry edge   : %.6e mm  (%.4f nm)\n"
           % (fld.h_entry_mm, fld.h_entry_mm * 1e6))
         w("**   h at the exit edge    : %.6e mm  (%.4f nm)\n"
           % (fld.h_exit_mm, fld.h_exit_mm * 1e6))
-        if fld.transition_u_mm is None:
-            side = ("ENTIRELY BRITTLE" if fld.h_entry_mm >= dc
-                    and fld.h_exit_mm >= dc else "ENTIRELY DUCTILE")
-            w("**   the whole scratch is %s: h never crosses dc\n" % side)
-        else:
+        # Report EVERY crossing. A prescribed arc rises above dc and comes back
+        # down, so it transitions twice, and the endpoints are equal -- naming
+        # only the first, or testing only the ends, describes half the run.
+        st = list(getattr(fld, "transition_all_mm", ())
+                  or ([fld.transition_u_mm]
+                      if fld.transition_u_mm is not None else []))
+        if not st:
+            # No crossing at all: decide which regime from a point that is
+            # actually inside the cut, not from the ends, which on an arc are
+            # both at zero depth and would always read ductile.
+            mid = fld.h_at(0.0)
+            side = "ENTIRELY BRITTLE" if mid >= dc else "ENTIRELY DUCTILE"
+            w("**   the whole scratch is %s: h never crosses dc\n"
+              % side)
+        elif len(st) == 1:
             w("**   ductile-brittle transition at u = %+.6f mm from the block\n"
-              % fld.transition_u_mm)
+              % st[0])
             w("**   centre -- plot SDV13 to see it.\n")
+        else:
+            w("**   %d ductile-brittle transitions, at u =\n" % len(st))
+            for u in st:
+                w("**     %+.6f mm from the block centre\n" % u)
+            w("**   the cut rises through dc and falls back, so the scratch\n")
+            w("**   runs ductile - brittle - ductile. Plot SDV13 to see it.\n")
     if p.placeholder:
         w("**\n")
         w("** WARNING: the Johnson-Cook constants below are PLACEHOLDERS for\n")
@@ -582,6 +676,14 @@ def write_hybrid_material(w, p: HybridParams, wp, jh2_constants,
             theta_c_rad=fld.theta_c, h0_mm=fld.h0_mm, hg=fld.hg,
             rtip_mm=fld.rtip_mm, u_gov_mm=fld.u_gov_mm,
             h_entry_mm=fld.h_entry_mm, h_exit_mm=fld.h_exit_mm,
-            transition_u_mm=fld.transition_u_mm)),
+            transition_u_mm=fld.transition_u_mm,
+            transition_all_mm=list(getattr(fld, "transition_all_mm", ())),
+            # Which terms were imposed rather than derived. The geometry
+            # verifier checks H0 and HG against the seating and the infeed,
+            # which is exactly the right check for a deck whose profile is a
+            # CONSEQUENCE -- and exactly the wrong one for a deck whose profile
+            # is the SPECIFICATION. It has to be told which it is looking at.
+            h0_prescribed=getattr(p, "h0_override_mm", None) is not None,
+            hg_prescribed=getattr(p, "hg_override", None) is not None)),
         "placeholder_constants": bool(p.placeholder),
     }

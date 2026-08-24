@@ -70,6 +70,11 @@ RUN_ME/**/*.npy
 RUN_ME_SIC/**/*.npy
 RUN_ME/grain_library.pkl
 RUN_ME_SIC/grain_library.pkl
+
+# RUN_TRAJECTORY/ is the same deal: the three scallop-trajectory decks are 3.7,
+# 25 and 33 MB. Rebuild all three with
+#     python _make_trajectory_jobs.py
+RUN_TRAJECTORY/**/*.inp
 ARC30_CUTS/
 PRESENT/
 PRESENT_ARC30/
@@ -192,3 +197,9 @@ env/
 Thumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Scratch from the CAD viewer harnesses (_cadviewer_check/_shot/_drive.py).
+# Screenshots and built pages, regenerated on every run.
+_cadshot_*.png
+_cadcheck_*
+_caddrive.*

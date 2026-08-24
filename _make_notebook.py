@@ -80,7 +80,8 @@ SEM .tif ──▶ calibrate ──▶ segment ──▶ measure ──▶ 3D gr
 
 ## Which cells do I run?
 
-**In a hurry — four cells.**
+**In a hurry — four cells.** (Cell 3 also draws the full analysis; untick
+`S_SHOW_ANALYSIS` if you only want the numbers.)
 
 | | |
 |---|---|
@@ -98,10 +99,17 @@ change takes about a second.
 
 | | | | |
 |---|---|---|---|
-| **A1** calibration & segmentation | **A2** measure | **A3** check the measurements | **A4** wheel & grits |
-| **A5** workpiece, mesh, outputs | **A6** run-ready analysis | **A7** preview | **A8** abrasive heights & standoff |
-| **A9** grinding theory | **A10–A12** 3-D views | **A13** build | **A14** APS (optional) |
-| **A15** verify the deck | **A16** download | | |
+| **A1** calibration & segmentation | **A2** measure | **A2a–A2e** *what happened to the image* | **A3** check the measurements |
+| **A4** wheel & grits | **A5** workpiece, mesh, outputs | **A6** run-ready analysis | **A7** preview |
+| **A8** abrasive heights & standoff | **A9** grinding theory | **A10–A12** 3-D views | **A13** build |
+| **A13b** *the model and the physics* | **A14** APS (optional) | **A15** verify the deck | **A16** download |
+
+**A2a–A2e and A13b are the evidence cells.** They draw every stage the pipeline ran —
+the calibration cross-check, all twelve segmentation stages, the measured grain
+population, the real outlines against convex hulls, every solid's verification against
+closed-form geometry, the assembled model, and the ductile/brittle transition — for
+*your* image and *your* settings. They are what a paper or a report needs, and they are
+also the fastest way to see that a setting in A1 did what you meant.
 
 Skip cells 3 and 4 if you are using the `A` path — set `RUN_SIMPLE` to false in cell 3.
 
@@ -271,10 +279,26 @@ S_NAME = "wheel"                 #@param {type:"string"}
 S_SHOW_CAD = True                #@param {type:"boolean"}
 #@markdown &nbsp;&nbsp;Show the 3-D viewer as well as the drawings. Untick it if you are
 #@markdown iterating quickly and only want the numbers.
+S_SHOW_ANALYSIS = True           #@param {type:"boolean"}
+#@markdown &nbsp;&nbsp;Also draw **what happened to your SEM image** -- the calibration
+#@markdown cross-check, all twelve segmentation stages, the measured grain population,
+#@markdown the real outlines against convex hulls, and every solid verified against
+#@markdown closed-form geometry. That is the evidence a paper needs; the A2a-A2e cells
+#@markdown draw the same set with more control. The grain library still comes from the
+#@markdown cache -- only the segmentation is re-derived, which costs about a second an
+#@markdown image -- so this does not slow down iterating on wheel settings.
 
 import os, time
 import matplotlib.pyplot as plt
 from IPython.display import HTML, display
+
+
+# The one name this notebook shows figures through. Bound, not wrapped: the
+# headless notebook test rewrites a four-space-indented show call into two lines
+# that reference a `fig` local, so a helper whose body was that single line would
+# become a NameError in any cell that has no `fig`. A binding has no such line.
+_show = plt.show
+
 from semgrit.quick import (SIMPLE_MEASURE, WORKPIECE_SIZES, library_summary,
                            measure_images, simple_params)
 from semgrit.build_deck import plan_deck
@@ -294,11 +318,82 @@ if RUN_SIMPLE:
     # override, because an override is exactly the thing that silently rescales every
     # grain and therefore the whole wheel. Measuring is cached, so re-running after a
     # wheel change costs nothing.
-    MEASURED = measure_images(IMAGES, OUT_MEAS, pixel_size_um=0.0, **SIMPLE_MEASURE)
+    MEASURED = measure_images(IMAGES, OUT_MEAS, pixel_size_um=0.0,
+                              keep_stages=S_SHOW_ANALYSIS, **SIMPLE_MEASURE)
     SOLIDS, ALL_GRAINS = MEASURED["solids"], MEASURED["grains"]
+    PER_IMAGE = MEASURED.get("per_image") or []
     if not MEASURED["cached"]:
         print()
         library_summary(SOLIDS)
+
+    # Everything the pipeline did to the image, drawn. The A cells expose the same
+    # figures one at a time with their own controls; here they run as one block for
+    # the first image, which is what makes the four-cell route publishable too.
+    if S_SHOW_ANALYSIS and PER_IMAGE:
+        from semgrit import figures as F
+        from semgrit.measure import grain_statistics
+        _rec = PER_IMAGE[0]
+        _sem, _seg = _rec["sem"], _rec["seg"]
+        print()
+        print("=" * 78)
+        print("WHAT HAPPENED TO %s" % _rec["name"])
+        print("=" * 78)
+        print("  pixel size      : %.5f um/px  from %s"
+              % (_sem.pixel_size_um, _sem.pixel_size_source))
+        if _sem.scalebar_agreement is not None:
+            _a = 100 * _sem.scalebar_agreement
+            print("  metadata vs bar : %+.2f %%  -> %s"
+                  % (_a, "agree" if abs(_a) <= 5 else "DISAGREE"))
+        print("  field of view   : %.1f x %.1f um" % (_sem.width_um, _sem.height_um))
+        _ev = (_rec["stages"] or {}).get("boundary_evidence") or {}
+        _kept = sum(1 for v in _ev.values() if v["kept"])
+        print("  segmentation    : %d seeds -> %d watershed regions -> %d grains"
+              % (_seg.n_seeds, (_rec["stages"] or {})["watershed_raw"].max(),
+                 _seg.n_grains))
+        print("                    %d boundaries, %d kept, %d merged back"
+              % (len(_ev), _kept, len(_ev) - _kept))
+        _st = grain_statistics(_rec["grains"], _sem, interior_only=True)
+        print("  measured        : %d grains, %d border-truncated and excluded"
+              % (_st["n_grains_total"], _st["n_grains_border"]))
+        if _st["equivalent_diameter_um"].get("n"):
+            _d = _st["equivalent_diameter_um"]
+            print("  size d10/d50/d90: %.2f / %.2f / %.2f um"
+                  % (_d["d10"], _d["d50"], _d["d90"]))
+        _good = [r for r in _rec["reports"] if r.get("ok")]
+        if not _rec["reports"]:
+            print("  3-D solids      : %d from the cache (verification reports are"
+                  % len(_rec["solids"]))
+            print("                    produced only on a fresh measurement)")
+        else:
+            print("  3-D solids      : %d verified, %d rejected"
+                  % (len(_good), len(_rec["reports"]) - len(_good)))
+        if _good:
+            print("  worst volume error vs closed form : %.2e relative"
+                  % max(abs(r["volume_rel_error"]) for r in _good))
+        print()
+        # Every figure goes through _draw(). The headless notebook test rewrites
+        # a four-space-indented show call wherever it occurs in the cell, and a
+        # more deeply indented line ending in the same characters loses its tail
+        # to unindented code -- which breaks the enclosing block silently rather
+        # than failing where the mistake is. Keeping exactly one such call, at
+        # the top level of the helper, keeps that rewrite harmless.
+        def _draw(_make):
+            try:
+                _make()
+                _show()
+            except Exception as _exc:
+                print("  (a figure could not be drawn: %s)" % _exc)
+
+        _draw(lambda: F.calibration(_rec))
+        _draw(lambda: F.segmentation_stages(_rec))
+        _draw(lambda: F.segmentation_overlay(_rec))
+        _draw(lambda: F.measurement_distributions(_rec["grains"]))
+        _draw(lambda: F.outline_fidelity(_rec))
+        _draw(lambda: F.solid_verification(_rec))
+        _draw(lambda: F.grain_gallery(_rec["solids"], n=8))
+        if len(PER_IMAGE) > 1:
+            print("  (%d more image(s) measured - the A2a..A2e cells draw any of them)"
+                  % (len(PER_IMAGE) - 1))
 
     if S_WORKPIECE == "custom":
         _wp = tuple(float(x) for x in S_CUSTOM_MM.lower().replace(",", "x").split("x"))
@@ -456,6 +551,16 @@ print("settings captured - run the next cell to measure")
 
 CELLS.append(code('''
 #@title ▶ A2 · Measure the grains and build the 3-D grain library { display-mode: "form" }
+#@markdown `KEEP_STAGES` also keeps every intermediate of the segmentation -- the
+#@markdown thresholded image, the distance transform, the seeds, the watershed before and
+#@markdown after the merge -- so cells **A2a to A2e** can draw what happened to your
+#@markdown image. It is what makes the pipeline showable rather than merely reported.
+#@markdown
+#@markdown It costs memory (about a dozen arrays the size of the micrograph, per image)
+#@markdown and it bypasses the measurement cache, so a re-run re-measures. Untick it if
+#@markdown you are iterating on *wheel* settings and do not need the figures again.
+KEEP_STAGES = True   #@param {type:"boolean"}
+
 # The body of this lives in semgrit.quick so that Simple mode runs the same code.
 import os, numpy as np
 from semgrit.quick import measure_images, library_summary
@@ -465,7 +570,7 @@ from semgrit.grain3d import HeightModel, LoftProfile
 OUT_MEAS = os.path.join(WORK, "1_measurements")
 
 MEASURED = measure_images(
-    IMAGES, OUT_MEAS, pixel_size_um=PIXEL_SIZE_UM,
+    IMAGES, OUT_MEAS, pixel_size_um=PIXEL_SIZE_UM, keep_stages=KEEP_STAGES,
     seg_params=SegmentationParams(
         min_grain_um=MIN_GRAIN_UM, h_maxima_um=H_MAXIMA_UM,
         gradient_weight=GRADIENT_WEIGHT, min_edge_strength=MIN_EDGE_STRENGTH,
@@ -478,6 +583,7 @@ MEASURED = measure_images(
     simplify_um=SIMPLIFY_UM, max_vertices=MAX_VERTICES,
     interior_only=not INCLUDE_BORDER_GRAINS)
 SOLIDS, ALL_GRAINS = MEASURED["solids"], MEASURED["grains"]
+PER_IMAGE = MEASURED.get("per_image") or []
 
 print()
 LIB = library_summary(SOLIDS)
@@ -485,6 +591,216 @@ print()
 print("  -> a sensible EDGE_RADIUS_UM is ~10%% of the d50 width = %.3f um"
       % (0.10 * LIB["width_um"][1]))
 print("     (set it in A1 and re-run if you want blunted cutting edges)")
+if PER_IMAGE:
+    print()
+    print("  %d image(s) kept their segmentation stages - run A2a to A2e to see"
+          % len(PER_IMAGE))
+elif KEEP_STAGES:
+    print()
+    print("  (stages came from the cache, so the figures below have nothing to draw;")
+    print("   re-run this cell with KEEP_STAGES ticked to re-measure)")
+'''))
+
+CELLS.append(md(r"""
+---
+## What happened to your image
+
+The cells below draw every stage of the measurement, from the calibration through to the
+verified 3-D solids, **for the images you just measured and the settings you set in A1**.
+Nothing here is a stock illustration: change a threshold or a height model in A1, re-run
+A2, and these figures change with it.
+
+They are the evidence for a paper or a report. Each one is a matplotlib figure, so
+right-click to save, or call `fig.savefig(...)` yourself.
+
+> They need `KEEP_STAGES` ticked in A2. Segmentation intermediates are otherwise
+> discarded as soon as the grains are measured.
+"""))
+
+CELLS.append(code('''
+#@title 🖼 A2a · Which image to draw, and the calibration { display-mode: "form" }
+#@markdown Every figure from here to A2e is drawn for **one** image at a time -- a
+#@markdown segmentation panel is about 2 MB, so drawing fourteen of them by default
+#@markdown would make the notebook unopenable. Pick which, or tick `ALL_IMAGES`.
+IMAGE_INDEX = 0        #@param {type:"integer"}
+ALL_IMAGES = False     #@param {type:"boolean"}
+SHOW_ANALYSIS = True   #@param {type:"boolean"}
+
+import matplotlib.pyplot as plt
+from semgrit import figures as F
+
+
+# Figures are shown through this name. Bound rather than wrapped -- see the note
+# in the SIMPLE cell: the headless test rewrites an indented show call into code
+# referencing a `fig` local, which a one-line wrapper would inherit.
+_show = plt.show
+
+
+def _recs():
+    """The per-image records the figures draw from, honouring the two controls."""
+    if not PER_IMAGE:
+        raise SystemExit(
+            "no captured stages: tick KEEP_STAGES in A2 and re-run it. (A cache hit "
+            "also returns none -- KEEP_STAGES forces a fresh measurement.)")
+    if ALL_IMAGES:
+        return PER_IMAGE
+    i = max(0, min(int(IMAGE_INDEX), len(PER_IMAGE) - 1))
+    return [PER_IMAGE[i]]
+
+if SHOW_ANALYSIS:
+    print("images measured:")
+    for i, r in enumerate(PER_IMAGE):
+        print("  [%d] %-24s %4d grains -> %3d solids  %.5f um/px (%s)"
+              % (i, r["name"], len(r["grains"]), len(r["solids"]),
+                 r["sem"].pixel_size_um, r["sem"].pixel_size_source))
+    print()
+    for rec in _recs():
+        sem = rec["sem"]
+        print("=" * 78)
+        print("1  CALIBRATION - %s" % rec["name"])
+        print("=" * 78)
+        print("  full frame        : %d x %d px" % sem.full_intensity.shape[::-1])
+        print("  databar cropped at: row %d" % sem.databar_top)
+        print("  pixel size        : %.5f um/px   from %s"
+              % (sem.pixel_size_um, sem.pixel_size_source))
+        print("  field of view     : %.1f x %.1f um" % (sem.width_um, sem.height_um))
+        print("  magnification     : %s" % (sem.magnification or "not recorded"))
+        if sem.scalebar_agreement is not None:
+            a = 100 * sem.scalebar_agreement
+            print("  metadata vs bar   : %+.2f %%  -> %s"
+                  % (a, "agree (5 % tolerance)" if abs(a) <= 5 else "DISAGREE"))
+        for w in sem.warnings:
+            print("  warning           : %s" % w)
+        F.calibration(rec)
+        _show()
+else:
+    print("analysis figures skipped - tick SHOW_ANALYSIS")
+'''))
+
+CELLS.append(code('''
+#@title 🔬 A2b · Segmentation, stage by stage { display-mode: "form" }
+#@markdown All twelve stages, drawn from the arrays `segment_grains` actually used.
+#@markdown The scatter in panel 11 is the split-retention decision for every shared
+#@markdown boundary: kept if the image carries a real edge there, or the two regions
+#@markdown meet at a narrow neck; merged back otherwise.
+if SHOW_ANALYSIS:
+    for rec in _recs():
+        seg, st = rec["seg"], rec["stages"]
+        ev = st.get("boundary_evidence") or {}
+        kept = sum(1 for v in ev.values() if v["kept"])
+        print("=" * 78)
+        print("2  SEGMENTATION - %s" % rec["name"])
+        print("=" * 78)
+        print("  thresholds (%s) : %s" % (seg.params.threshold_method,
+              ", ".join("%.0f" % t for t in seg.threshold_values)))
+        print("  foreground            : %.1f %% of the frame"
+              % (100.0 * seg.foreground.mean()))
+        print("  distance transform max: %.2f um" % st["distance_um"].max())
+        print("  h-maxima seeds        : %d" % seg.n_seeds)
+        print("  watershed regions     : %d  (over-segmented on purpose)"
+              % st["watershed_raw"].max())
+        print("  shared boundaries     : %d -> %d kept, %d merged back"
+              % (len(ev), kept, len(ev) - kept))
+        print("  rejected by area      : %d too small, %d too large"
+              % (seg.rejected["too_small"], seg.rejected["too_large"]))
+        print("  FINAL GRAINS          : %d   (%d touch the frame edge)"
+              % (seg.n_grains, len(seg.border_labels)))
+        F.segmentation_stages(rec)
+        _show()
+'''))
+
+CELLS.append(code('''
+#@title 📐 A2c · What was measured, and what was deliberately not { display-mode: "form" }
+#@markdown Left: every region the segmentation found, green for interior and vermillion
+#@markdown for border-truncated. Right: the ones that became verified 3-D solids.
+#@markdown Border grains are real grains cut off by the frame, so their size is
+#@markdown meaningless -- they are measured and then excluded from the distributions.
+if SHOW_ANALYSIS:
+    for rec in _recs():
+        F.segmentation_overlay(rec)
+        _show()
+'''))
+
+CELLS.append(code('''
+#@title 📊 A2d · The measured grain population { display-mode: "form" }
+#@markdown 25 descriptors are computed per grain, on the real outline and never a convex
+#@markdown hull. These are the six that change a grinding answer. The second figure is
+#@markdown what a convex hull would have erased -- the concave notches that do the
+#@markdown cutting -- ranked by how much area the hull would add.
+if SHOW_ANALYSIS:
+    from semgrit.measure import grain_statistics
+    for rec in _recs():
+        stats = grain_statistics(rec["grains"], rec["sem"],
+                                 interior_only=not INCLUDE_BORDER_GRAINS)
+        print("=" * 78)
+        print("3  MEASURED POPULATION - %s" % rec["name"])
+        print("=" * 78)
+        print("  grains measured  : %d   (border-truncated %d, used %d)"
+              % (stats["n_grains_total"], stats["n_grains_border"],
+                 stats["n_grains_used"]))
+        print("  areal density    : %.0f grains/mm2   covering %.1f %% of the field"
+              % (stats["areal_density_per_mm2"],
+                 100 * stats["area_coverage_fraction"]))
+        print()
+        print("  %-24s %8s %8s %8s %8s" % ("descriptor", "d10", "d50", "d90", "max"))
+        print("  " + "-" * 60)
+        for key, label in [("equivalent_diameter_um", "equivalent diameter um"),
+                           ("feret_max_um", "max Feret um"),
+                           ("feret_min_um", "min Feret um"),
+                           ("aspect_ratio", "aspect ratio"),
+                           ("circularity", "circularity"),
+                           ("solidity", "solidity")]:
+            d = stats[key]
+            if d.get("n"):
+                print("  %-24s %8.3f %8.3f %8.3f %8.3f"
+                      % (label, d["d10"], d["d50"], d["d90"], d["max"]))
+        print()
+        F.measurement_distributions(rec["grains"],
+                                    interior_only=not INCLUDE_BORDER_GRAINS)
+        _show()
+        F.outline_fidelity(rec)
+        _show()
+'''))
+
+CELLS.append(code('''
+#@title 🧊 A2e · The 3-D solids, and their verification { display-mode: "form" }
+#@markdown Each grain is lofted into a watertight polyhedron and checked against
+#@markdown closed-form geometry *before* it is allowed into the library: mesh volume
+#@markdown against the analytic prismatoid sum, maximum projected section against the
+#@markdown measured outline, a closed surface, no inverted tets. The histograms are those
+#@markdown per-grain errors across the whole population, so the tolerance is shown to
+#@markdown hold everywhere rather than on one spot-checked grain.
+GALLERY_GRAINS = 8   #@param {type:"integer"}
+if SHOW_ANALYSIS:
+    for rec in _recs():
+        good = [r for r in rec["reports"] if r.get("ok")]
+        bad = [r for r in rec["reports"] if not r.get("ok")]
+        print("=" * 78)
+        print("4  3-D RECONSTRUCTION - %s" % rec["name"])
+        print("=" * 78)
+        if not rec["reports"]:
+            print("  the per-grain verification reports are not in the cache: they")
+            print("  are produced when the grains are measured, and this run reused a")
+            print("  cached library. The solids themselves are the cached ones.")
+        print("  grains offered   : %d" % len(rec["reports"]))
+        print("  solids verified  : %d" % len(good))
+        print("  rejected         : %d" % len(bad))
+        if good:
+            print("  worst mesh-vs-analytic volume error   : %.2e relative"
+                  % max(abs(r["volume_rel_error"]) for r in good))
+            print("  worst section-vs-outline area error   : %.2e relative"
+                  % max(abs(r["projected_area_rel_error"]) for r in good))
+        if bad:
+            import collections
+            for msg, n in collections.Counter(
+                    "; ".join(r.get("issues", ["?"])) for r in bad).most_common(4):
+                print("    %3d rejected: %s" % (n, msg[:64]))
+        print()
+        F.solid_verification(rec)
+        _show()
+        if rec["solids"]:
+            F.grain_gallery(rec["solids"], n=max(1, int(GALLERY_GRAINS)))
+            _show()
 '''))
 
 CELLS.append(code('''
@@ -1057,7 +1373,12 @@ CELLS.append(code('''
 #@markdown | **Parts tree** | show or hide the bond, the grits, the workpiece |
 #@markdown | **Boundary conditions** | ENCASTRE pins on the held faces, the infeed arrow, the rotation arc, the reference node, the contact surfaces — every symbol standing for a keyword the deck really writes |
 #@markdown | **Drag block** (`G`) | drag the workpiece along the arc, shift-drag for standoff, arrow keys nudge by 0.1 µm, `Esc` cancels |
-#@markdown | **Depth-of-cut band** | the valid window shaded green between *nothing touches* and *bond hits the work* — the two ways a run has already been wasted |
+#@markdown | **Depth-of-cut band** | the valid window shaded green between *nothing touches* and *bond hits the work* — the two ways a run has already been wasted. Drag the slider under it to set `ae` |
+#@markdown | **Colour the grains by** | protrusion, height, width, volume, or engages-the-block — the whole dressing distribution at once, with a legend carrying the real measured range, instead of one grain at a time |
+#@markdown | **Explode** | pull bond, grits and workpiece apart along the radius, so the protrusion and the standoff are visible as gaps |
+#@markdown | **Cap the cut face** | fills the section with a solid face instead of looking through a hollow shell |
+#@markdown | **Fullscreen** (`⛶`, or double-click) | and a drag handle on the bottom edge; the height is remembered |
+#@markdown | **Keyboard** (`?`) | `F` fit, `G` drag, `1`–`6` standard views, `W`/`C` wheel and contact, `E` edges, `O` ortho, `X` cycle the section axis |
 #@markdown | **Save PNG** | a figure for the report |
 #@markdown
 #@markdown The boundary conditions are read out of the deck, not decorated on: a
@@ -1352,6 +1673,134 @@ if INFO.get("run_ready"):
     print("  The VUMAT must drive the deletion flag SDV%d to 0 once D reaches 1."
           % N_DEPVAR)
     print("  One that only ever writes 1 deletes nothing, and the result looks ductile.")
+'''))
+
+CELLS.append(code('''
+#@title 📈 A13b · The assembled model, and the ductile/brittle physics { display-mode: "form" }
+#@markdown The same figures the presentation notebook draws, for **your** deck: the wheel
+#@markdown and the seated block at the three scales they live at, the critical depth of
+#@markdown cut for every material and both published forms, and -- if this deck carries
+#@markdown the hybrid law -- the chip thickness h(u) against dc with the transition
+#@markdown station solved for.
+#@markdown
+#@markdown Everything is read out of `PLAN`, which is built by the same placement code
+#@markdown the writer uses, so these cannot disagree with the `.inp` that was just
+#@markdown written.
+SHOW_MODEL_FIGURES = True   #@param {type:"boolean"}
+
+# Imported at the top level of the cell, never inside the `if`. The headless
+# notebook test rewrites the pyplot import by prepending two unindented lines to
+# it, and inside an indented block that is an IndentationError.
+import matplotlib.pyplot as plt
+from semgrit import figures as F
+from semgrit.materials import MATERIALS, quasi_static_ucs_mpa
+
+# Bound, not wrapped: the same test rewrites an indented show call into code
+# referencing a `fig` local, which a one-line wrapper would inherit in a cell
+# that has no such variable.
+_show = plt.show
+
+if SHOW_MODEL_FIGURES:
+    if "PLAN" not in globals():
+        from semgrit.build_deck import plan_deck
+        PLAN = plan_deck(PARAMS, SOLIDS)
+
+    print("=" * 78)
+    print("5  THE ASSEMBLED MODEL")
+    print("=" * 78)
+    print("  wheel              : %.1f mm diameter, %.3f mm of arc modelled"
+          % (2 * PLAN["outer_radius_mm"], PLAN.get("arc_length_mm", 0.0)))
+    print("  grits              : %d placed, %d can reach the block"
+          % (PLAN["n_grits"], PLAN.get("n_grits_under_block", 0)))
+    _p = PLAN.get("protrusion_um") or {}
+    if _p.get("n"):
+        print("  protrusion         : %.2f um mean, %.2f um max"
+              % (_p.get("mean", 0.0), _p.get("max", 0.0)))
+    _wp = PLAN.get("workpiece")
+    if _wp:
+        _e = PLAN.get("element_um") or (0, 0, 0, 0)
+        print("  workpiece          : %.0f x %.0f x %.0f um, %s elements"
+              % (_wp["length_mm"] * 1000, _wp["width_mm"] * 1000,
+                 _wp["depth_mm"] * 1000,
+                 format(PLAN.get("n_workpiece_elements", 0), ",")))
+        print("  surface element    : %.4f x %.4f x %.4f um  (cut x axial x depth)"
+              % (_e[0], _e[1], _e[2]))
+        _lo = min(v for v in _e[:3] if v > 0) if any(_e[:3]) else 1.0
+        print("  aspect ratio       : %.1f : 1" % (max(_e[:3]) / _lo))
+    _c = PLAN.get("cost") or {}
+    if _c:
+        print("  stable increment   : %.3e s, %s increments"
+              % (_c.get("stable_dt_s") or 0,
+                 format(int(_c.get("increments") or 0), ",")))
+        print("  estimated run time : %.2f h on 8 cores"
+              % ((_c.get("est_hours") or {}).get("8", 0.0)))
+    print()
+    F.assembly(PLAN)
+    _show()
+
+    # ---- the critical depth of cut, per material and per published form -----
+    print()
+    print("=" * 78)
+    print("6  THE DUCTILE / BRITTLE TRANSITION")
+    print("=" * 78)
+    for key, mat in MATERIALS.items():
+        print()
+        print("  %s" % mat.label)
+        print("    hardness H %.0f MPa   toughness Kc %.2f MPa.m^0.5   rho %.0f kg/m3"
+              % (mat.dc["hardness_mpa"], mat.dc["kic_mpa_sqrt_m"],
+                 mat.density_kg_m3))
+        print("    quasi-static UCS from its own JH-2 card : %.1f MPa"
+              % quasi_static_ucs_mpa(mat.jh2))
+        print("      -> this is what Johnson-Cook A is set to, so the ductile and")
+        print("         brittle branches meet at the transition instead of stepping")
+        print("    dc : form 1 %8.2f nm     form 2 (Bifano) %8.2f nm"
+              % (mat.dc_nm(1), mat.dc_nm(2)))
+    print()
+    print("  The two published forms differ by (E/H)^1.5, so lambda_c belongs to one")
+    print("  of them and is NOT transferable. Say which you used with any result.")
+    print()
+    F.dc_forms(MATERIALS)
+    _show()
+
+    # ---- h(u) against dc, only when this deck actually carries the hybrid law
+    _an = getattr(PARAMS, "analysis", None)
+    _hp = getattr(_an, "hybrid", None) if _an is not None else None
+    if _hp is not None and getattr(_an, "material_model", "") == "hybrid":
+        from semgrit.hybrid import plan_hybrid
+        FIELD, DC_MM = plan_hybrid(PLAN, _hp)
+        print()
+        print("  THE SWITCH, for this deck")
+        print("    dc               : %.2f nm  (form %d)"
+              % (DC_MM * 1e6, _hp.dc_form))
+        print("    depth of cut ae  : %.3f um = %.1f x dc"
+              % (_an.depth_of_cut_um, (_an.depth_of_cut_um / 1000.0) / DC_MM
+                 if DC_MM else 0.0))
+        print("    H0   = %+.6e mm     chip thickness at the block centre"
+              % FIELD.h0_mm)
+        print("    HG   = %+.6e        wedge slope, = -v_r / v_s" % FIELD.hg)
+        print("    RTIP = %+.6e mm     grit tip radius (sets the sagitta)"
+              % FIELD.rtip_mm)
+        print("    h at block entry : %8.2f nm" % (FIELD.h_entry_mm * 1e6))
+        print("    h at block exit  : %8.2f nm" % (FIELD.h_exit_mm * 1e6))
+        if FIELD.transition_u_mm is not None:
+            print("    TRANSITION       : u = %+.3f um along the scratch"
+                  % (FIELD.transition_u_mm * 1000))
+        else:
+            print("    TRANSITION       : h never crosses dc over this block")
+        _el = PLAN.get("element_um") or (0, 0, 0, 0)
+        if _el[2] > 0:
+            print("    elements across dc : %.2f   (below ~4 the transition is an"
+                  % (DC_MM * 1000.0 / _el[2]))
+            print("                         artefact of where the boundary falls)")
+        print()
+        F.chip_thickness(FIELD, DC_MM, _wp["length_mm"] if _wp else 0.048)
+        _show()
+    else:
+        print()
+        print("  This deck does not carry the hybrid law, so there is no h(u) to draw.")
+        print("  Set MATERIAL_MODEL = 'hybrid' in A5, or use the B cells below.")
+else:
+    print("model figures skipped - tick SHOW_MODEL_FIGURES")
 '''))
 
 CELLS.append(code('''
