@@ -6,6 +6,12 @@ exported as an Abaqus `.inp` deck.
 
 Replaces `SEM_WHEEL (1).ipynb` / `sem_wheel (1).py`.
 
+> **New to the project? Read [`THEORY.md`](THEORY.md) first.** It is a
+> self-contained account of the physics and mathematics — every equation the
+> model uses, derived or cited, with what may and may not be quoted from the
+> results. This file is how to *run* it; `context.md` is how the code is laid
+> out; `THEORY.md` is what it *means*.
+
 ## Install
 
 ```bash
@@ -270,7 +276,7 @@ without it. The gradient length is floored at the Burgers vector, or `h → 0` i
 rubbing zone returns an infinite flow stress.
 
 **Damage degrades the surface, not the stress.** Scaling the stress tensor by `(1-D)`
-each increment — which `vumat_jc_damage.for` does — compounds to `(1-D)^k`, and the
+each increment — which `vumat_jc_damage (1).for` does — compounds to `(1-D)^k`, and the
 per-increment loss soon cancels the elastic increment exactly: the point parks under
 yield and never fails. Measured on the material-point driver, plastic strain froze at
 3.1e-4 and `D` at 0.0017 for the remaining 39,000 increments. Both branches therefore
