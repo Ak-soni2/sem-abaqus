@@ -225,18 +225,61 @@ def spot_length_mm(compression_mm: float, speed_rpm: float) -> float:
     return 17.69 * (compression_mm ** 0.232) * (speed_rpm ** 0.012)
 
 
-def hertz_semi_axes_mm(area_mm2: float, length_mm: float) -> tuple:
-    """Semi-axes (a, b) of the elliptical patch, from its area and length.
+def hertz_semi_axes_mm(area_mm2: float, length_mm: float,
+                       face_width_mm: float = 0.0) -> tuple:
+    """Semi-axes (a, b) of the contact patch, from its area and length.
 
     The paper measures both the area (eq. 6) and the length along L-L (eq. 7),
-    and an ellipse is fixed by the pair: ``a = Ls/2`` and ``pi a b = As``.
+    and a free ellipse is fixed by the pair: ``a = Ls/2`` and ``pi a b = As``.
     Deriving b this way keeps both measurements rather than assuming a shape.
+
+    THE ELLIPSE DOES NOT FIT ON THE WHEEL. Eqs. 6 and 7 are independent
+    empirical fits, and combining them gives a contact WIDTH ``2b`` that exceeds
+    the paper's own 10 mm face at every one of its operating points -- 10.16 mm
+    at T = 0.6 up to 11.14 mm at T = 0.2, so 1.5% to 11% over. The contact
+    therefore runs off both edges of the wheel and is CLIPPED, not elliptical,
+    which also means Hertz's semi-infinite half-space assumption is violated
+    across the face.
+
+    Pass ``face_width_mm`` and the clipping is reported: ``b`` is capped at the
+    half-width and the shortfall in area is returned, so a caller can say how
+    much of the patch the ellipse model is misplacing instead of quietly using
+    a width the tool does not have. Left at 0, the free ellipse is returned
+    unchanged and nothing is hidden either way.
     """
     a = 0.5 * length_mm
     if a <= 0:
         raise SAGError("spot length must be positive")
-    b = area_mm2 / (math.pi * a)
+    b_free = area_mm2 / (math.pi * a)
+    if face_width_mm <= 0:
+        return a, b_free
+    b = min(b_free, 0.5 * face_width_mm)
     return a, b
+
+
+def clipping_report(area_mm2: float, length_mm: float,
+                    face_width_mm: float) -> dict:
+    """How badly the elliptical patch overruns the wheel face.
+
+    ``overrun`` is 2b/W: at 1.0 the ellipse exactly fits, above 1.0 it does
+    not exist on this wheel. ``area_clipped_fraction`` is how much of the
+    nominal area falls outside the face.
+    """
+    if face_width_mm <= 0:
+        raise SAGError("face width must be positive")
+    a, b_free = hertz_semi_axes_mm(area_mm2, length_mm)
+    overrun = 2.0 * b_free / face_width_mm
+    if overrun <= 1.0:
+        return dict(a_mm=a, b_free_mm=b_free, b_used_mm=b_free,
+                    overrun=overrun, clipped=False,
+                    area_clipped_fraction=0.0, area_on_face_mm2=area_mm2)
+    # Area of the ellipse inside |y| <= W/2, as a fraction of pi a b.
+    t = 0.5 * face_width_mm / b_free            # < 1
+    frac_on = (2.0 / math.pi) * (math.asin(t) + t * math.sqrt(1.0 - t * t))
+    return dict(a_mm=a, b_free_mm=b_free, b_used_mm=0.5 * face_width_mm,
+                overrun=overrun, clipped=True,
+                area_clipped_fraction=1.0 - frac_on,
+                area_on_face_mm2=area_mm2 * frac_on)
 
 
 def max_pressure_mpa(load_n: float, area_mm2: float) -> float:
@@ -410,6 +453,10 @@ class SAGContact:
     shallow_cap_valid: bool
     depth_over_grain: float
     density_measured: bool
+    face_overrun: float = 0.0
+    """2b/W. Above 1 the elliptical patch is wider than the wheel face."""
+    area_clipped_fraction: float = 0.0
+    area_on_face_mm2: float = 0.0
 
     @property
     def indentation_nm(self) -> float:
@@ -448,8 +495,11 @@ def solve_contact(tool: Tool, *, compression_mm: float, speed_rpm: float,
 
     a_s = spot_area_mm2(compression_mm, speed_rpm)               # eq. (6)
     l_s = spot_length_mm(compression_mm, speed_rpm)              # eq. (7)
-    a, b = hertz_semi_axes_mm(a_s, l_s)
-    p0 = max_pressure_mpa(fn, a_s)
+    clip = clipping_report(a_s, l_s, tool.width_mm)
+    a, b = clip["a_mm"], clip["b_used_mm"]
+    # Pressure uses the area actually ON the face: a load spread over a patch
+    # that partly does not exist would understate the pressure.
+    p0 = max_pressure_mpa(fn, clip["area_on_face_mm2"])
 
     nabr = tool.pad.active_per_mm2 * a_s                         # eq. (8)
     if nabr <= 0:
@@ -484,6 +534,9 @@ def solve_contact(tool: Tool, *, compression_mm: float, speed_rpm: float,
         shallow_cap_valid=chk["shallow_cap_valid"],
         depth_over_grain=chk["depth_over_grain"],
         density_measured=tool.pad.measured_density,
+        face_overrun=clip["overrun"],
+        area_clipped_fraction=clip["area_clipped_fraction"],
+        area_on_face_mm2=clip["area_on_face_mm2"],
     )
 
 
@@ -666,6 +719,30 @@ def demo() -> None:
     # --- the ellipse closes ----------------------------------------------
     a, b = hertz_semi_axes_mm(a_s, l_s)
     assert abs(math.pi * a * b - a_s) < 1e-9, "ellipse area must round-trip"
+
+    # --- but it does not fit on the wheel --------------------------------
+    # 2b exceeds the paper's own 10 mm face at every one of its settings, so
+    # the patch is clipped by the wheel edge. Assert the overrun is real and
+    # systematic rather than a single-point artefact.
+    worst = 0.0
+    for T in (0.2, 0.4, 0.6):
+        for N in (300.0, 550.0, 800.0, 1050.0):
+            r = clipping_report(spot_area_mm2(T, N), spot_length_mm(T, N), 10.0)
+            assert r["clipped"], (T, N, r["overrun"])
+            assert r["b_used_mm"] == 5.0, "b must be capped at the half-width"
+            worst = max(worst, r["overrun"])
+    assert 1.10 < worst < 1.15, worst
+    # the clipped AREA is small, so the ellipse model is nearly self-consistent
+    # -- this is a caveat on the width, not a refutation of the fits
+    r04 = clipping_report(spot_area_mm2(0.4, 1050.0),
+                          spot_length_mm(0.4, 1050.0), 10.0)
+    assert r04["area_clipped_fraction"] < 0.05
+    assert r04["area_on_face_mm2"] < spot_area_mm2(0.4, 1050.0)
+    # a wide enough wheel is not clipped at all
+    wide = clipping_report(spot_area_mm2(0.4, 1050.0),
+                           spot_length_mm(0.4, 1050.0), 40.0)
+    assert not wide["clipped"] and wide["area_clipped_fraction"] == 0.0
+    assert abs(wide["b_used_mm"] - wide["b_free_mm"]) < 1e-12
 
     # --- eq. 1 is p0 at the centre and zero at the rim -------------------
     p0 = max_pressure_mpa(10.0, a_s)

@@ -63,6 +63,27 @@ PU_REFERENCE_DECK_DENSITY_KG_M3 = 0.22
 reproduce it exactly, clearly labelled, rather than the number being lost."""
 
 
+PRESS_MACH = 0.005
+"""Press-in speed as a fraction of the compliant layer's dilatational wave
+speed. The press has to be quasi-static or the contact pressure is inertial
+rather than Hertzian: a ramp fast compared with the wave speed launches a stress
+wave through the layer and the patch never reaches equilibrium. The reference
+deck presses ~0.8 mm in 0.0005 s, which is v/c = 0.09 and only 1.8 wave transits
+of a 5 mm layer -- so its contact pressure is not the steady one its own Hertz
+comparison assumes."""
+
+HOLD_TAUS = 3.0
+"""Dwell, in Prony relaxation times, between pressing and grinding.
+
+The polyurethane is viscoelastic, so its stiffness depends on how long the load
+has been there. The paper measures a STEADY force with a load cell, and the
+Hertz model it compares against uses ``moduli=LONG TERM`` -- the RELAXED
+modulus. A deck that presses and immediately grinds is still in the glassy
+state and would carry a stiffer layer, a smaller patch and a higher force per
+grain than the experiment. Three time constants leaves ~5% of the relaxation
+unfinished, which is below the spread on the measured forces."""
+
+
 class SAGDeckError(RuntimeError):
     pass
 
@@ -149,7 +170,12 @@ class SAGParams:
     compression_mm: float = 0.4
     speed_rpm: float = 1050.0
     friction: float = 0.2
-    press_time_s: float = 0.0005
+    press_time_s: float = 0.0
+    """Press-in duration. 0 -> derived so the press stays quasi-static
+    (v/c = PRESS_MACH of the compliant layer's own wave speed)."""
+    hold_time_s: float = 0.0
+    """Dwell after pressing. 0 -> HOLD_TAUS * the Prony relaxation time, so the
+    layer relaxes to its long-term modulus before grinding starts."""
     grind_time_s: float = 0.02
 
     # --- the workpiece ----------------------------------------------------
@@ -200,12 +226,56 @@ class SAGParams:
             raise SAGDeckError(
                 "elements_per_grain = %g cannot carry a grain's shape in-plane"
                 % self.elements_per_grain)
+        if self.press_time_s > 0 and self.press_mach() > 0.05:
+            raise SAGDeckError(
+                "press_time_s = %g gives v/c = %.3f in the compliant layer. "
+                "Above ~0.01 the contact pressure is inertial rather than "
+                "Hertzian and the patch never reaches equilibrium; leave it 0 "
+                "to have a quasi-static time derived."
+                % (self.press_time_s, self.press_mach()))
+        if self.hold_time_s > 0 and                 self.hold_time_s < self.polyurethane.prony_tau_s:
+            raise SAGDeckError(
+                "hold_time_s = %g is shorter than the Prony relaxation time "
+                "%g, so the layer is still glassy when grinding starts and "
+                "will carry more load than the relaxed experiment."
+                % (self.hold_time_s, self.polyurethane.prony_tau_s))
         if self.compression_mm >= self.polyurethane.thickness_mm:
             raise SAGDeckError(
                 "compression %.3f mm meets or exceeds the %.3f mm compliant "
                 "layer, so the hub would contact the work and the tool is no "
                 "longer compliant"
                 % (self.compression_mm, self.polyurethane.thickness_mm))
+
+    def wave_speed_mm_s(self) -> float:
+        """Dilatational wave speed of the compliant layer, mm/s.
+
+        Uses the small-strain modulus of the neo-Hookean card (E = 6*C10) at
+        the layer's own density. This is what sets both the quasi-static press
+        rate and the layer's share of the stable time increment.
+        """
+        e = self.polyurethane.modulus_mpa
+        rho = self.polyurethane.density_tonne_mm3()
+        return math.sqrt(e / rho)
+
+    def press_time(self) -> float:
+        if self.press_time_s > 0:
+            return self.press_time_s
+        return self.compression_mm / (PRESS_MACH * self.wave_speed_mm_s())
+
+    def hold_time(self) -> float:
+        if self.hold_time_s > 0:
+            return self.hold_time_s
+        return HOLD_TAUS * self.polyurethane.prony_tau_s
+
+    def press_mach(self) -> float:
+        """v/c of the press. Above ~0.01 the contact is inertial."""
+        t = self.press_time()
+        return (self.compression_mm / t) / self.wave_speed_mm_s() if t > 0             else float("inf")
+
+    def wave_transits(self) -> float:
+        """How many times a wave crosses the layer during the press."""
+        c = self.wave_speed_mm_s()
+        return self.press_time() * c / self.polyurethane.thickness_mm
 
     def tool(self) -> sag.Tool:
         pad = sag.Pad(self.grain_um, areal_per_mm2=self.pad_areal_per_mm2)
@@ -308,6 +378,16 @@ def plan(p: SAGParams) -> dict:
         contact=contact,
         dc_forms=dc_forms,
         carbide=k,
+        timing=dict(
+            wave_speed_mm_s=p.wave_speed_mm_s(),
+            press_time_s=p.press_time(), press_mach=p.press_mach(),
+            wave_transits=p.wave_transits(),
+            hold_time_s=p.hold_time(),
+            hold_taus=p.hold_time() / p.polyurethane.prony_tau_s,
+            grind_time_s=p.grind_time_s,
+            total_time_s=p.press_time() + p.hold_time() + p.grind_time_s,
+            press_velocity_mm_s=p.compression_mm / p.press_time(),
+        ),
         macro=dict(
             hub_diameter_mm=p.hub_diameter(),
             layer_thickness_mm=p.polyurethane.thickness_mm,
@@ -432,15 +512,30 @@ def macro_header(pl: dict) -> list:
     L = header_lines(pl)
     mac = pl["macro"]
     inf = pl["infeasible"]
+    t = pl["timing"]
     a = L.append
     a("**")
     a("** THIS IS THE MACRO DECK: THE CONTACT, NOT THE TRANSITION")
     a("**")
     a("** It carries the compliant tool -- rigid hub, %.1f mm polyurethane"
       % mac["layer_thickness_mm"])
-    a("** ring, and %s measured grains -- pressed in over %.6f s and"
-      % (format(mac["grains"], ","), pl["params"].press_time_s))
-    a("** then rotated for %.6f s." % pl["params"].grind_time_s)
+    a("** ring, and %s measured grains." % format(mac["grains"], ","))
+    a("**")
+    a("** THREE STEPS, and the first two are timed by the layer's own physics:")
+    a("**   1 PRESS  %.6f s   %.1f mm/s = %.4f of the layer's wave speed"
+      % (t["press_time_s"], t["press_velocity_mm_s"], t["press_mach"]))
+    a("**                        (%.1f wave transits of the %.1f mm layer, so"
+      % (t["wave_transits"], mac["layer_thickness_mm"]))
+    a("**                        the patch reaches equilibrium rather than")
+    a("**                        being loaded inertially)")
+    a("**   2 HOLD   %.6f s   %.1f Prony relaxation times, so the layer"
+      % (t["hold_time_s"], t["hold_taus"]))
+    a("**                        relaxes to its LONG-TERM modulus -- which is")
+    a("**                        the state the measured force and the Hertz")
+    a("**                        comparison both correspond to")
+    a("**   3 GRIND  %.6f s   at %.1f rpm" % (t["grind_time_s"],
+                                              pl["params"].speed_rpm))
+    a("**   total    %.6f s" % t["total_time_s"])
     a("**")
     a("** A SECTOR, not the whole wheel: %.3f deg, %.3f mm of arc, %.3f mm2"
       % (mac["sector_deg"], mac["sector_arc_mm"], mac["sector_area_mm2"]))
