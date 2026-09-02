@@ -155,8 +155,15 @@ def main():
     chk('payload contains every package file', not absent,
         '%d files, %s' % (len(members),
                           'none missing' if not absent else 'MISSING %s' % absent[:4]))
+    # Only compare files the payload actually HAS. A file present on disk but
+    # absent from the notebook is already reported as missing above; reading it
+    # from the extract as well raised FileNotFoundError and killed the whole
+    # run, so a new module -- the ordinary case, before the notebooks are
+    # regenerated -- turned one informative failure into a crash that hid every
+    # later check.
     stale = [f for f in on_disk
-             if open(f, 'rb').read() != open(os.path.join(OUT, f), 'rb').read()]
+             if os.path.exists(os.path.join(OUT, f))
+             and open(f, 'rb').read() != open(os.path.join(OUT, f), 'rb').read()]
     # The single most likely way this notebook breaks: the package is edited and the
     # notebook is not regenerated, so Colab silently runs an older pipeline.
     chk('payload is up to date with the package on disk', not stale,

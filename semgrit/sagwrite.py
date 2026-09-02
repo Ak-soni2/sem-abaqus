@@ -133,12 +133,15 @@ def build_compliant_ring(*, inner_r_mm: float, outer_r_mm: float,
     for it in range(n_circ):
         for ir in range(n_rad):
             for iz in range(n_axial):
-                # bottom face, then top: counter-clockwise about +z
+                # Bottom face first, wound counter-clockwise seen from +z,
+                # then the matching top face. Counter-clockwise here means
+                # +r THEN +theta: going +theta first and then +r traces the
+                # quad clockwise and inverts every element in the ring.
                 conn.append([
-                    nid(it, ir, iz), nid(it + 1, ir, iz),
-                    nid(it + 1, ir + 1, iz), nid(it, ir + 1, iz),
-                    nid(it, ir, iz + 1), nid(it + 1, ir, iz + 1),
-                    nid(it + 1, ir + 1, iz + 1), nid(it, ir + 1, iz + 1),
+                    nid(it, ir, iz), nid(it, ir + 1, iz),
+                    nid(it + 1, ir + 1, iz), nid(it + 1, ir, iz),
+                    nid(it, ir, iz + 1), nid(it, ir + 1, iz + 1),
+                    nid(it + 1, ir + 1, iz + 1), nid(it + 1, ir, iz + 1),
                 ])
     conn = np.array(conn, dtype=np.int64)
 
@@ -157,12 +160,16 @@ def build_compliant_ring(*, inner_r_mm: float, outer_r_mm: float,
     return nodes, conn, faces
 
 
-def hex_volume(nodes: np.ndarray, conn: np.ndarray) -> float:
+def hex_volume(nodes: np.ndarray, conn: np.ndarray, signed: bool = False
+               ) -> float:
     """Total volume of a hex mesh, by decomposing each cell into tetrahedra.
 
-    Exists to catch inverted elements: a negative total means the node ordering
-    is wrong, which Abaqus reports as a cryptic preprocessing failure on a
-    million-element deck. Cheap here, expensive there.
+    ``signed=True`` keeps the sign, which is the only way this catches an
+    inverted element: taking ``abs`` per tetrahedron -- as this function
+    originally did -- returns the right volume for a mesh whose every element
+    is wound backwards, so it silently passed a ring that Abaqus would have
+    rejected. Abaqus reports that as a preprocessing failure with no element
+    numbers on a million-element deck, so it is worth catching here.
     """
     tets = ((0, 1, 3, 4), (1, 2, 3, 6), (1, 3, 4, 6),
             (3, 4, 6, 7), (1, 4, 5, 6))
@@ -171,10 +178,10 @@ def hex_volume(nodes: np.ndarray, conn: np.ndarray) -> float:
     p = nodes[conn]                              # (n_el, 8, 3)
     tot = 0.0
     for a, b, c, d in tets:
-        tot += np.abs(np.einsum(
-            "ij,ij->i",
-            np.cross(p[:, b] - p[:, a], p[:, c] - p[:, a]),
-            p[:, d] - p[:, a])).sum() / 6.0
+        v = np.einsum("ij,ij->i",
+                      np.cross(p[:, b] - p[:, a], p[:, c] - p[:, a]),
+                      p[:, d] - p[:, a]) / 6.0
+        tot += v.sum() if signed else np.abs(v).sum()
     return float(tot)
 
 
@@ -456,10 +463,18 @@ def demo() -> None:
         length_mm=0.05, width_mm=0.05, depth_mm=0.002,
         el_length_mm=0.0003, el_width_mm=0.0003,
         fine_depth_mm=16e-6, band_mm=0.0008, growth=1.25)
-    bv = hex_volume(bn, bc)
+    bv = hex_volume(bn, bc, signed=True)
+    assert bv > 0, "the block mesh is wound backwards"
     assert abs(bv - 0.05 * 0.05 * 0.002) / (0.05 * 0.05 * 0.002) < 1e-9, \
         "a box mesh must reproduce the box volume exactly"
     assert bm["nz"] + 1 == len(bm["z_planes"])
+
+    # Every element positive, not merely the total: a mesh with half its
+    # elements inverted can still sum to the right volume, and the ring
+    # bug this caught was uniform inversion that abs() hid completely.
+    from .meshview import hex_jacobians
+    assert (hex_jacobians(bn, bc) > 0).all(), "a block element inverted"
+    assert (hex_jacobians(nodes, conn) > 0).all(), "a ring element inverted"
     # the top face must be the ground surface
     assert abs(bn[bm["top"], 2].max()) < 1e-15
 

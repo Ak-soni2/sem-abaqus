@@ -411,6 +411,38 @@ try {
     });
 
     buildBC();
+
+    // NOT inside buildBC(): that returns early when the view has no
+    // boundary conditions, and it also used to be nested in the engage
+    // block. Either way a view with no per-grain data -- a mesh view, or
+    // a deck whose grains all miss the work -- never reached it, so the
+    // colour-by selector stayed ENABLED but wired to nothing: picking an
+    // entry did nothing and explained nothing. setupColourBy's own guard
+    // disables it and says why, so it has to be reached to do that.
+    setupColourBy();
+    // A mesh view is fed element geometry, not grain solids, so the panel's
+    // grain wording is wrong there. Retitled here rather than forking the
+    // template: one template, two vocabularies, and the labels stay honest
+    // about what a click will actually tell you.
+    if (META.kind === 'mesh') {
+      const hd = [...document.querySelectorAll('#cadtools .cadhd')]
+        .find(h => /colour the grains by/i.test(h.textContent));
+      if (hd) hd.textContent = 'Colour by';
+      const pick = document.getElementById('cadpick');
+      if (pick) pick.textContent = 'click an element face';
+      const first = document.getElementById('cadfirst');
+      if (first) {
+        const b = first.querySelector('b');
+        if (b) b.textContent = 'This is the MESH the .inp contains';
+        first.innerHTML = first.innerHTML
+          .replace(/<b>click a grain<\/b> to read its size and protrusion/,
+                   '<b>element edges</b> are drawn: check that dc is resolved')
+          .replace(/<b>colour by<\/b>/, '<b>explode</b>');
+      }
+      const insp = [...document.querySelectorAll('#cadinfo .cadhd')]
+        .find(h => /inspect/i.test(h.textContent));
+      if (insp) insp.textContent = 'Mesh';
+    }
     buildEditPanel();
     makeCollapsible();
 
@@ -1138,7 +1170,6 @@ try {
       engageMesh.visible = false;
       gritMesh.add(engageMesh);
     }
-    setupColourBy();
 
     // the panel
     const box = document.getElementById('cadbclist');
