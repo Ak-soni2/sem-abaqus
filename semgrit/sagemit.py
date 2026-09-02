@@ -1,0 +1,758 @@
+"""Emit the two SAG decks as complete, submittable Abaqus input files.
+
+``sagwrite`` builds the meshes and the material card; this assembles them into
+``.inp`` files with parts, instances, surfaces, constraints, steps, contact and
+output, and writes them to disk.
+
+WHAT EACH DECK IS FOR, AND WHAT IT CANNOT DO
+--------------------------------------------
+``MACRO`` presses the compliant tool into the workpiece and rotates it. Rigid
+hub, hyperelastic/viscoelastic polyurethane ring, measured grains on the pad.
+It answers the *contact*: patch size, pressure distribution, how many grains
+engage and what load each carries. Its workpiece is meshed for contact, not for
+``dc``, so it CANNOT resolve a ductile-brittle transition and its header says so.
+
+``MICRO`` takes one patch of that contact and meshes it at ``dc/5`` through the
+depth. It answers the *transition*: SDV13, ductile against brittle, under the
+per-grain load MACRO computed. The two are coupled by that single number and
+both headers print it, so the pair cannot be quoted out of step.
+
+WHY GENERAL CONTACT, NOT CONTACT PAIRS
+--------------------------------------
+The reference deck uses ``*Contact`` + ``*Contact Inclusions, ALL EXTERIOR``,
+and that is not an arbitrary preference -- it is required here for three
+reasons, any one of which would be enough:
+
+* **Element deletion.** The VUMAT deletes failed elements (SDV12), and deletion
+  exposes interior faces that were not on the exterior when the job started.
+  General contact re-forms its domain as that happens; a contact pair declared
+  on a pre-computed surface never sees the new faces, so a chip would separate
+  and then pass through the tool.
+* **The engaged set is the answer.** Which grains touch is what the model is
+  for. Pairs would have to declare them in advance, which assumes the result.
+* **Self-contact.** A compliant layer at high compression can fold onto itself.
+
+Cost scales with facet count, which is why the grain cap is quoted in facets.
+
+Both run in ``*Dynamic, Explicit``: general contact is the contact algorithm,
+explicit is the solver, and they are independent choices that happen to be the
+right ones together here.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+from typing import Optional, Sequence
+
+import numpy as np
+
+from . import sag, sagdeck, sagwrite
+from .sagwrite import (SAGWriteError, _elem_lines, _fmt, _node_lines,
+                       _pack_ids, build_block, build_compliant_ring,
+                       hex_volume)
+
+# Element-set names, one place so the deck and the postprocessor agree.
+ES_WORK = "ES_WORK"
+ES_WORK_FINE = "ES_WORK_FINE"
+ES_PU = "ES_PU"
+ES_HUB = "ES_HUB"
+NS_WORK_FIXED = "NS_WORK_FIXED"
+NS_HUB_REF = "NS_HUB_REF"
+SURF_WORK_TOP = "SURF_WORK_TOP"
+SURF_PU_OUTER = "SURF_PU_OUTER"
+SURF_HUB_OUTER = "SURF_HUB_OUTER"
+SURF_PU_BORE = "SURF_PU_BORE"
+
+
+def _surface_from_quads(name: str, elset: str, face: str) -> list:
+    """A surface named by element set and face code (S1..S6)."""
+    return ["*Surface, type=ELEMENT, name=%s" % name, " %s, %s" % (elset, face)]
+
+
+def _grain_parts(solids: Sequence, plan_: dict, *, n_grains: int,
+                 radius_mm: float, sector_deg: float, width_mm: float,
+                 protrusion_frac: float, seed: int = 7) -> tuple:
+    """Place measured grains on the pad's outer face.
+
+    Grains are placed on the cylindrical surface at ``radius_mm``, each buried
+    so that ``protrusion_frac`` of its height stands clear -- which is the
+    physical statement that a grit cuts only as deep as it protrudes, and the
+    same convention the rigid pipeline uses.
+
+    Returned as one merged triangle soup per grain set, because general contact
+    wants surfaces and a thousand separate parts would make an unreadable deck.
+    """
+    rng = np.random.default_rng(seed)
+    verts, faces, tags = [], [], []
+    off = 0
+    n_avail = len(solids)
+    for i in range(n_grains):
+        s = solids[int(rng.integers(0, n_avail))]
+        v = np.asarray(s.vertices, dtype=np.float64) / 1000.0     # um -> mm
+        v = v - np.asarray(s.centroid_um, dtype=np.float64) / 1000.0
+        h = s.height_um / 1000.0
+        # random spin about the grain's own axis, so the pad is not a lattice
+        a = rng.uniform(0.0, 2.0 * math.pi)
+        ca, sa = math.cos(a), math.sin(a)
+        v = v @ np.array([[ca, -sa, 0.0], [sa, ca, 0.0], [0.0, 0.0, 1.0]]).T
+        # seat it: the grain's local +z becomes the outward radial direction
+        th = math.radians(rng.uniform(0.0, sector_deg))
+        z = rng.uniform(0.1 * width_mm, 0.9 * width_mm)
+        # buried so protrusion_frac of the height is clear of the pad
+        r_seat = radius_mm - (1.0 - protrusion_frac) * h
+        er = np.array([math.cos(th), math.sin(th), 0.0])
+        et = np.array([-math.sin(th), math.cos(th), 0.0])
+        ez = np.array([0.0, 0.0, 1.0])
+        # local (x, y, z) -> (tangential, axial, radial)
+        world = (v[:, 0:1] * et + v[:, 1:2] * ez + v[:, 2:3] * er)
+        world = world + er * r_seat + ez * z
+        verts.append(world)
+        faces.append(np.asarray(s.faces, dtype=np.int64) + off)
+        tags.append(dict(index=i, theta_deg=math.degrees(th), z_mm=z,
+                         height_um=s.height_um,
+                         protrusion_um=protrusion_frac * s.height_um,
+                         grain_id=getattr(s, "grain_id", -1)))
+        off += len(v)
+    if not verts:
+        raise SAGWriteError("no grains were placed")
+    return (np.vstack(verts), np.vstack(faces), tags)
+
+
+def _step_block(name: str, time_s: float, *, mass_scale: float = 0.0,
+                bcs: Sequence[str] = (), comment: Sequence[str] = (),
+                intervals: int = 40) -> list:
+    """One ``*Step`` with explicit dynamics, bulk viscosity and output."""
+    L = ["** " + "-" * 70]
+    L += ["** " + c for c in comment]
+    L += ["*Step, name=%s, nlgeom=YES" % name,
+          "*Dynamic, Explicit", ", %s" % _fmt(time_s),
+          "*Bulk Viscosity", " 0.06, 1.2"]
+    if mass_scale > 0:
+        L += ["** Mass scaling is stated, not hidden in the density. The",
+              "** reference deck under-densified the polyurethane by ~5000x",
+              "** AND applied factor 50, which double-counts the speedup and",
+              "** removes the ring's inertia.",
+              "*Fixed Mass Scaling, factor=%s" % _fmt(mass_scale)]
+    if bcs:
+        L += ["*Boundary, op=NEW, type=VELOCITY"]
+        L += list(bcs)
+    L += ["*Restart, write, number interval=1, time marks=NO",
+          "*Output, field, number interval=%d" % intervals,
+          "*Node Output", " U, V, A, RF, RM",
+          "*Element Output, directions=YES",
+          # Only what is used. The reference asks for ~70 variables including
+          # BURNF and IWCONWEP on 1.09 M elements, which is an enormous .odb
+          # for fields nothing reads.
+          " S, MISES, PEEQ, LE, SDV, STATUS, EVOL, IVOL",
+          "*Contact Output", " CSTRESS, CDISP, CFORCE, CNAREA, CSTATUS",
+          "*Output, history, time interval=%s" % _fmt(time_s / 200.0),
+          "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ALLVD, ETOTAL",
+          "*End Step"]
+    return L
+
+
+def write_macro(path: str, pl: dict, solids: Sequence, *,
+                seed: int = 7) -> dict:
+    """The contact deck: compliant tool pressed into the work, then rotated."""
+    p: sagdeck.SAGParams = pl["params"]
+    mac = pl["macro"]
+    t = pl["timing"]
+    c: sag.SAGContact = pl["contact"]
+    from . import materials
+
+    if not solids:
+        raise SAGWriteError("the grain library is empty")
+
+    r_out = 0.5 * p.diameter_mm
+    r_pu_in = r_out - p.polyurethane.thickness_mm
+    r_hub_in = max(r_pu_in - 0.5 * p.polyurethane.thickness_mm, 0.05 * r_out)
+    sect = mac["sector_deg"]
+
+    # Circumferential divisions: enough that the faceted arc is smooth to well
+    # under the wheel compression, or the contact would see a polygon.
+    arc_target = min(p.compression_mm * 0.25, r_out * math.radians(sect) / 8.0)
+    n_circ = max(int(math.ceil(math.radians(sect) * r_out / arc_target)), 8)
+    # Through-thickness: a layer that must BEND needs several elements or it
+    # only shears. Six is the usual minimum for a bending sandwich layer.
+    n_rad_pu = 6
+    n_ax = max(int(round(p.width_mm / (p.width_mm / 8.0))), 8)
+
+    pu_n, pu_c, pu_f = build_compliant_ring(
+        inner_r_mm=r_pu_in, outer_r_mm=r_out, width_mm=p.width_mm,
+        sector_deg=sect, n_circ=n_circ, n_rad=n_rad_pu, n_axial=n_ax)
+    hub_n, hub_c, hub_f = build_compliant_ring(
+        inner_r_mm=r_hub_in, outer_r_mm=r_pu_in, width_mm=p.width_mm,
+        sector_deg=sect, n_circ=n_circ, n_rad=2, n_axial=n_ax)
+
+    for nm, (nn, cc) in (("polyurethane", (pu_n, pu_c)), ("hub", (hub_n, hub_c))):
+        if hex_volume(nn, cc, signed=True) <= 0:
+            raise SAGWriteError("%s mesh is wound backwards" % nm)
+
+    # Workpiece: sized to the arc the tool sweeps during the grind step, plus
+    # the contact length, so the tool never runs off the end of the block.
+    sweep = c.surface_speed_mm_s * p.grind_time_s
+    wp_len = sweep + 2.0 * c.semi_axis_a_mm * 0.2 + 4.0 * p.compression_mm
+    wp_wid = min(p.width_mm, 2.0 * c.semi_axis_b_mm)
+    wp_dep = max(20.0 * p.compression_mm, 0.5)
+    el_ip = max(p.compression_mm / 4.0, wp_len / 400.0)
+    wp_n, wp_c, wp_m = build_block(
+        length_mm=wp_len, width_mm=wp_wid, depth_mm=wp_dep,
+        el_length_mm=el_ip, el_width_mm=el_ip,
+        fine_depth_mm=p.compression_mm / 8.0,
+        band_mm=2.0 * p.compression_mm, growth=1.3,
+        x0_mm=-0.5 * wp_len, y0_mm=-0.5 * wp_wid, top_z_mm=0.0)
+
+    gv, gf, gtags = _grain_parts(
+        solids, pl, n_grains=mac["grains"], radius_mm=r_out,
+        sector_deg=sect, width_mm=p.width_mm,
+        protrusion_frac=0.55, seed=seed)
+
+    # Seat the tool at first contact: the tallest protrusion just touches the
+    # ground face. No gap to close, so the press-in displacement IS the wheel
+    # compression -- which is what removes the reference deck's ambiguity
+    # between a velocity and a displacement.
+    tallest = max(g["protrusion_um"] for g in gtags) / 1000.0
+    y_centre = r_out + tallest
+
+    w = materials.get(p.material)
+    L = sagdeck.macro_header(pl)
+    a = L.append
+    a("*Heading")
+    a("** SAG MACRO -- %s -- contact, not transition" % p.name)
+    a("*Preprint, echo=NO, model=NO, history=NO, contact=NO")
+
+    # ---- parts ----------------------------------------------------------
+    a("**")
+    a("*Part, name=HUB")
+    a("*Node")
+    L += _node_lines(hub_n)
+    a("*Element, type=C3D8R")
+    L += _elem_lines(hub_c)
+    a("*Elset, elset=%s, generate" % ES_HUB)
+    a(" 1, %d, 1" % len(hub_c))
+    a("*Solid Section, elset=%s, material=HUBSTEEL" % ES_HUB)
+    a(" ,")
+    a("*End Part")
+
+    a("**")
+    a("*Part, name=PU")
+    a("*Node")
+    L += _node_lines(pu_n)
+    a("*Element, type=C3D8R")
+    L += _elem_lines(pu_c)
+    a("*Elset, elset=%s, generate" % ES_PU)
+    a(" 1, %d, 1" % len(pu_c))
+    a("** The compliant layer. DISTORTION CONTROL because a hyperelastic")
+    a("** layer at 0.4 mm compression distorts far more than a metal, and")
+    a("** ENHANCED hourglass because C3D8R has zero-energy modes that a soft")
+    a("** material excites readily.")
+    a("*Solid Section, elset=%s, controls=EC1, material=POLYURETHANE" % ES_PU)
+    a(" ,")
+    a("*End Part")
+
+    a("**")
+    a("*Part, name=GRAINS")
+    a("** Measured SEM grain geometry, rigid: a diamond abrasive is ~10x")
+    a("** stiffer than WC-Co and ~3000x stiffer than the polyurethane, so its")
+    a("** own deformation is not the physics and meshing it as a solid would")
+    a("** spend the element budget on the one body that does not deform.")
+    a("*Node")
+    L += _node_lines(gv)
+    a("*Element, type=R3D3")
+    L += _elem_lines(gf)
+    a("*Elset, elset=ES_GRAINS, generate")
+    a(" 1, %d, 1" % len(gf))
+    a("*End Part")
+
+    a("**")
+    a("*Part, name=WORK")
+    a("*Node")
+    L += _node_lines(wp_n)
+    a("*Element, type=C3D8R")
+    L += _elem_lines(wp_c)
+    a("*Elset, elset=%s, generate" % ES_WORK)
+    a(" 1, %d, 1" % len(wp_c))
+    a("*Nset, nset=%s" % NS_WORK_FIXED)
+    L += _pack_ids(sorted(set(wp_m["bottom"]) | set(wp_m["sides"])))
+    a("*Solid Section, elset=%s, controls=EC1, material=%s"
+      % (ES_WORK, w.inp_material))
+    a(" ,")
+    a("*End Part")
+
+    # ---- assembly -------------------------------------------------------
+    a("**")
+    a("*Assembly, name=Assembly")
+    a("**")
+    a("*Instance, name=WORK-1, part=WORK")
+    a("*End Instance")
+    for nm, part in (("HUB-1", "HUB"), ("PU-1", "PU"), ("GRAINS-1", "GRAINS")):
+        a("**")
+        a("*Instance, name=%s, part=%s" % (nm, part))
+        a(" 0., %s, 0." % _fmt(y_centre))
+        # The rings are built about +z; rotate so the wheel axis is z and the
+        # tool sits above the work in +y.
+        a(" 0., %s, 0., 1., %s, 0., -90." % (_fmt(y_centre), _fmt(y_centre)))
+        a("*End Instance")
+
+    a("**")
+    a("*Nset, nset=%s, instance=HUB-1" % NS_HUB_REF)
+    a(" 1,")
+    a("** The hub is rigid: it is the spindle, it carries the drive, and")
+    a("** making it deformable would cost elements on a body whose stiffness")
+    a("** is irrelevant beside a 0.345 MPa layer.")
+    a("*Rigid Body, ref node=%s, elset=HUB-1.%s" % (NS_HUB_REF, ES_HUB))
+
+    a("**")
+    a("*Tie, name=PU_TO_HUB, adjust=yes")
+    a(" PU-1.%s, HUB-1.%s" % (SURF_PU_BORE, SURF_HUB_OUTER))
+    a("*Tie, name=GRAINS_TO_PU, adjust=no")
+    a("** Grains are bonded to the pad rather than left to general contact:")
+    a("** a grit that could slide off its own backing is not an abrasive.")
+    a(" GRAINS-1.ES_GRAINS, PU-1.%s" % SURF_PU_OUTER)
+    a("*End Assembly")
+
+    # ---- element controls, materials -----------------------------------
+    a("**")
+    a("*Section Controls, name=EC1, DISTORTION CONTROL=YES,"
+      " ELEMENT DELETION=YES, hourglass=ENHANCED")
+    a(" 1., 1., 1.")
+    a("**")
+    a("*Material, name=HUBSTEEL")
+    a("*Density")
+    a(" 7.85e-09,")
+    a("*Elastic")
+    a(" 210000., 0.3")
+    a("**")
+    a("*Material, name=POLYURETHANE")
+    L += p.polyurethane.cards()
+    a("**")
+    L += sagwrite._material_block(pl, w.inp_material, 0.0,
+                                  p.compression_mm / 8.0)
+
+    # ---- interactions ---------------------------------------------------
+    a("**")
+    a("*Surface Interaction, name=IP_GRIND")
+    a("*Friction")
+    a(" %s," % _fmt(p.friction))
+    a("*Surface Behavior, pressure-overclosure=HARD")
+    a("**")
+    a("** GENERAL contact, not contact pairs, and it is required rather than")
+    a("** merely convenient: the VUMAT deletes elements, deletion exposes")
+    a("** interior faces that were not on the exterior at the start, and a")
+    a("** pair declared on a pre-computed surface would never see them -- a")
+    a("** chip would separate and then pass through the tool. Which grains")
+    a("** touch is also the ANSWER here, so it cannot be declared up front.")
+    a("*Contact, op=NEW")
+    a("*Contact Inclusions, ALL EXTERIOR")
+    a("*Contact Property Assignment")
+    a(" ,  , IP_GRIND")
+
+    # ---- boundary conditions -------------------------------------------
+    a("**")
+    a("*Boundary")
+    a(" WORK-1.%s, ENCASTRE" % NS_WORK_FIXED)
+
+    # ---- steps ----------------------------------------------------------
+    v_press = p.compression_mm / t["press_time_s"]
+    omega = p.speed_rpm * 2.0 * math.pi / 60.0
+    L += _step_block(
+        "PRESS", t["press_time_s"], mass_scale=p.mass_scale_factor,
+        comment=("STEP 1 of 3 -- press the tool in by the wheel compression.",
+                 "Velocity, not displacement, so the rate is explicit: %.1f"
+                 % v_press + " mm/s,",
+                 "which is %.4f of the layer's own wave speed. Above ~0.01"
+                 % t["press_mach"],
+                 "the patch is loaded inertially and its pressure is not the",
+                 "steady Hertzian one the experiment measured."),
+        bcs=(" %s, 1, 1, 0." % NS_HUB_REF,
+             " %s, 2, 2, %s" % (NS_HUB_REF, _fmt(-v_press)),
+             " %s, 3, 3, 0." % NS_HUB_REF,
+             " %s, 4, 4, 0." % NS_HUB_REF,
+             " %s, 5, 5, 0." % NS_HUB_REF,
+             " %s, 6, 6, 0." % NS_HUB_REF))
+    L += _step_block(
+        "HOLD", t["hold_time_s"], mass_scale=p.mass_scale_factor,
+        comment=("STEP 2 of 3 -- hold, so the polyurethane RELAXES.",
+                 "%.1f Prony time constants. The measured force is a steady"
+                 % t["hold_taus"],
+                 "reading and the Hertz comparison uses moduli=LONG TERM, so",
+                 "grinding straight after the press would carry a glassy",
+                 "layer: stiffer, smaller patch, more load per grain."),
+        bcs=(" %s, 1, 1, 0." % NS_HUB_REF,
+             " %s, 2, 2, 0." % NS_HUB_REF,
+             " %s, 3, 3, 0." % NS_HUB_REF,
+             " %s, 4, 4, 0." % NS_HUB_REF,
+             " %s, 5, 5, 0." % NS_HUB_REF,
+             " %s, 6, 6, 0." % NS_HUB_REF))
+    L += _step_block(
+        "GRIND", p.grind_time_s, mass_scale=p.mass_scale_factor,
+        comment=("STEP 3 of 3 -- rotate at %.1f rpm = %.4f rad/s."
+                 % (p.speed_rpm, omega),
+                 "The compression is HELD by fixing dof 2 while dof 6 spins,",
+                 "which is what a real infeed does: depth is set, then cut."),
+        bcs=(" %s, 1, 1, 0." % NS_HUB_REF,
+             " %s, 2, 2, 0." % NS_HUB_REF,
+             " %s, 3, 3, 0." % NS_HUB_REF,
+             " %s, 4, 4, 0." % NS_HUB_REF,
+             " %s, 5, 5, 0." % NS_HUB_REF,
+             " %s, 6, 6, %s" % (NS_HUB_REF, _fmt(-omega))))
+
+    # PU surfaces are needed by the ties; emit them inside the parts.
+    L = _inject_part_surfaces(L, pu_f, hub_f, wp_m)
+
+    with open(path, "w", encoding="ascii", newline="\n") as fh:
+        fh.write("\n".join(L) + "\n")
+
+    return dict(
+        kind="macro", path=path, bytes=os.path.getsize(path),
+        elements=len(hub_c) + len(pu_c) + len(wp_c),
+        pu_elements=len(pu_c), hub_elements=len(hub_c),
+        work_elements=len(wp_c), grain_facets=len(gf),
+        grains=len(gtags), nodes=len(hub_n) + len(pu_n) + len(wp_n) + len(gv),
+        sector_deg=sect, n_circ=n_circ, n_rad_pu=n_rad_pu,
+        work_mm=(wp_len, wp_wid, wp_dep),
+        tool_centre_y_mm=y_centre, tallest_protrusion_mm=tallest,
+        press_velocity_mm_s=v_press, omega_rad_s=omega,
+        steps=("PRESS", "HOLD", "GRIND"),
+        resolves_dc=False, grain_tags=gtags,
+    )
+
+
+def _inject_part_surfaces(lines: list, pu_f: dict, hub_f: dict,
+                          wp_m: dict) -> list:
+    """Add the element-face surfaces the ties and contact need.
+
+    Written as nodal surfaces on the bore/outer node sets, which is exact for a
+    structured ring: those node sets ARE the two cylindrical faces, so no face
+    codes have to be guessed from element ordering.
+    """
+    out = []
+    for ln in lines:
+        if ln == "*End Part" and out and "PU" in _current_part(out):
+            out.append("*Nset, nset=%s" % SURF_PU_BORE)
+            out += _pack_ids(pu_f["bore"])
+            out.append("*Nset, nset=%s" % SURF_PU_OUTER)
+            out += _pack_ids(pu_f["outer"])
+        elif ln == "*End Part" and out and "HUB" in _current_part(out):
+            out.append("*Nset, nset=%s" % SURF_HUB_OUTER)
+            out += _pack_ids(hub_f["outer"])
+        out.append(ln)
+    return out
+
+
+def _current_part(lines: list) -> str:
+    for ln in reversed(lines):
+        if ln.startswith("*Part, name="):
+            return ln.split("=", 1)[1]
+    return ""
+
+
+def write_micro(path: str, pl: dict, solids: Sequence, *,
+                psi: float = 0.0, seed: int = 11) -> dict:
+    """The resolved deck: one patch of contact at dc/5, energy criterion.
+
+    The grain is driven by a FORCE -- the per-grain load MACRO computed -- not
+    by a prescribed depth. Prescribing the depth would assume the answer, since
+    the indentation is what the model exists to predict.
+    """
+    from . import materials
+
+    p: sagdeck.SAGParams = pl["params"]
+    mic = pl["micro"]
+    c: sag.SAGContact = pl["contact"]
+    w = materials.get(p.material)
+    hp = w.hybrid_params()
+
+    if not solids:
+        raise SAGWriteError("the grain library is empty")
+
+    side = mic["side_mm"]
+    nodes, conn, meta = build_block(
+        length_mm=side, width_mm=side, depth_mm=mic["depth_mm"],
+        el_length_mm=mic["element_inplane_mm"],
+        el_width_mm=mic["element_inplane_mm"],
+        fine_depth_mm=mic["element_mm"],
+        band_mm=min(mic["depth_mm"], 10.0 * hp.critical_depth_mm()),
+        growth=1.25, x0_mm=-0.5 * side, y0_mm=-0.5 * side, top_z_mm=0.0)
+
+    vol = hex_volume(nodes, conn, signed=True)
+    want = side * side * mic["depth_mm"]
+    if vol <= 0:
+        raise SAGWriteError("the workpiece mesh is wound backwards")
+    if abs(vol - want) / want > 1e-6:
+        raise SAGWriteError("mesh volume %.6g != block %.6g" % (vol, want))
+
+    n_gr = max(int(mic["grains"]), 1)
+    gv, gf, gtags = _grain_parts(
+        solids, pl, n_grains=n_gr, radius_mm=0.0, sector_deg=0.0,
+        width_mm=0.0, protrusion_frac=1.0, seed=seed)
+    # _grain_parts seats on a cylinder; for a flat patch place them on the
+    # surface directly, spread over the patch and just clear of it.
+    rng = np.random.default_rng(seed)
+    gv = np.asarray(gv, dtype=np.float64)
+    per = len(gv) // n_gr
+    for i in range(n_gr):
+        sl = slice(i * per, (i + 1) * per if i < n_gr - 1 else len(gv))
+        blk = gv[sl]
+        blk = blk - blk.mean(axis=0)
+        x = rng.uniform(-0.35 * side, 0.35 * side)
+        y = rng.uniform(-0.35 * side, 0.35 * side)
+        blk[:, 0] += x
+        blk[:, 1] += y
+        blk[:, 2] += -blk[:, 2].min() + 0.02 * mic["depth_mm"]
+        gv[sl] = blk
+        gtags[i].update(x_mm=x, y_mm=y)
+
+    L = sagdeck.micro_header(pl)
+    a = L.append
+    a("*Heading")
+    a("** SAG MICRO -- %s -- the transition, resolved" % p.name)
+    a("*Preprint, echo=NO, model=NO, history=NO, contact=NO")
+    a("**")
+    a("*Part, name=WORK")
+    a("*Node")
+    L += _node_lines(nodes)
+    a("*Element, type=C3D8R")
+    L += _elem_lines(conn)
+    a("*Elset, elset=%s, generate" % ES_WORK)
+    a(" 1, %d, 1" % len(conn))
+    a("*Nset, nset=%s" % NS_WORK_FIXED)
+    L += _pack_ids(sorted(set(meta["bottom"]) | set(meta["sides"])))
+    a("*Solid Section, elset=%s, controls=EC1, material=%s"
+      % (ES_WORK, w.inp_material))
+    a(" ,")
+    a("*End Part")
+    a("**")
+    a("*Part, name=GRAINS")
+    a("*Node")
+    L += _node_lines(gv)
+    a("*Element, type=R3D3")
+    L += _elem_lines(gf)
+    a("*Elset, elset=ES_GRAINS, generate")
+    a(" 1, %d, 1" % len(gf))
+    a("*End Part")
+    a("**")
+    a("*Assembly, name=Assembly")
+    a("*Instance, name=WORK-1, part=WORK")
+    a("*End Instance")
+    a("*Instance, name=GRAINS-1, part=GRAINS")
+    a("*End Instance")
+    a("*Nset, nset=NS_GRAIN_REF, instance=GRAINS-1")
+    a(" 1,")
+    a("*Rigid Body, ref node=NS_GRAIN_REF, elset=GRAINS-1.ES_GRAINS")
+    a("*End Assembly")
+    a("**")
+    a("*Section Controls, name=EC1, DISTORTION CONTROL=YES,"
+      " ELEMENT DELETION=YES, hourglass=ENHANCED")
+    a(" 1., 1., 1.")
+    a("**")
+    L += sagwrite._material_block(pl, w.inp_material, psi, mic["element_mm"])
+    a("**")
+    a("*Surface Interaction, name=IP_GRIND")
+    a("*Friction")
+    a(" %s," % _fmt(p.friction))
+    a("*Surface Behavior, pressure-overclosure=HARD")
+    a("**")
+    a("*Contact, op=NEW")
+    a("*Contact Inclusions, ALL EXTERIOR")
+    a("*Contact Property Assignment")
+    a(" ,  , IP_GRIND")
+    a("**")
+    a("*Boundary")
+    a(" WORK-1.%s, ENCASTRE" % NS_WORK_FIXED)
+
+    # Drive by force, and slide tangentially so plastic work ACCUMULATES --
+    # the energy criterion triggers on history, so a grain that only indents
+    # and stops can never reach the threshold no matter how hard it presses.
+    fn = c.load_per_grain_n
+    v_slide = c.surface_speed_mm_s
+    slide_time = side / v_slide if v_slide > 0 else p.grind_time_s
+    L += ["** " + "-" * 70,
+          "** STEP 1 of 2 -- press the grain on with its own share of the",
+          "** contact load, %.4e N. A FORCE, not a prescribed depth: the" % fn,
+          "** indentation is what this deck exists to predict, so imposing it",
+          "** would assume the answer.",
+          "*Step, name=LOAD, nlgeom=YES",
+          "*Dynamic, Explicit", ", %s" % _fmt(slide_time * 0.2),
+          "*Bulk Viscosity", " 0.06, 1.2",
+          "*Boundary, op=NEW",
+          " NS_GRAIN_REF, 1, 1", " NS_GRAIN_REF, 2, 2",
+          " NS_GRAIN_REF, 4, 6",
+          "*Cload, amplitude=RAMP",
+          " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
+          "*Amplitude, name=RAMP", " 0., 0., 1., 1.",
+          "*Restart, write, number interval=1, time marks=NO",
+          "*Output, field, number interval=20",
+          "*Node Output", " U, V, A, RF",
+          "*Element Output, directions=YES",
+          " S, MISES, PEEQ, LE, SDV, STATUS, EVOL",
+          "*Contact Output", " CSTRESS, CDISP, CFORCE, CSTATUS",
+          "*Output, history, time interval=%s" % _fmt(slide_time * 0.001),
+          "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ETOTAL",
+          "*End Step"]
+    L += ["** " + "-" * 70,
+          "** STEP 2 of 2 -- SLIDE at the surface speed, %.1f mm/s." % v_slide,
+          "** This is the step that produces the result. The energy criterion",
+          "** triggers on ACCUMULATED plastic work, so the transition appears",
+          "** as the grain travels: a point starts ductile and turns brittle",
+          "** once W_p*L_c reaches H*dc. A grain that only indents and stops",
+          "** could never reach the threshold, however hard it pressed.",
+          "**",
+          "** PLOT SDV13: 1 ductile, 2 brittle. That is the result.",
+          "*Step, name=SLIDE, nlgeom=YES",
+          "*Dynamic, Explicit", ", %s" % _fmt(slide_time),
+          "*Bulk Viscosity", " 0.06, 1.2",
+          "*Boundary, op=NEW, type=VELOCITY",
+          " NS_GRAIN_REF, 1, 1, %s" % _fmt(v_slide),
+          " NS_GRAIN_REF, 2, 2, 0.", " NS_GRAIN_REF, 4, 6, 0.",
+          "*Cload, op=NEW",
+          " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
+          "*Restart, write, number interval=1, time marks=NO",
+          "*Output, field, number interval=60",
+          "*Node Output", " U, V, A, RF",
+          "*Element Output, directions=YES",
+          " S, MISES, PEEQ, LE, SDV, STATUS, EVOL",
+          "*Contact Output", " CSTRESS, CDISP, CFORCE, CSTATUS",
+          "*Output, history, time interval=%s" % _fmt(slide_time * 0.001),
+          "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ETOTAL",
+          "*End Step"]
+
+    with open(path, "w", encoding="ascii", newline="\n") as fh:
+        fh.write("\n".join(L) + "\n")
+
+    return dict(
+        kind="micro", path=path, bytes=os.path.getsize(path),
+        elements=len(conn), nodes=len(nodes) + len(gv),
+        grains=n_gr, grain_facets=len(gf),
+        block_mm=(side, side, mic["depth_mm"]),
+        element_depth_mm=mic["element_mm"],
+        element_inplane_mm=mic["element_inplane_mm"],
+        volume_mm3=vol, dc_nm=hp.critical_depth_mm() * 1e6,
+        dc_measured=w.dc_measured, psi=psi, swmode=1,
+        load_per_grain_n=fn, total_load_n=fn * n_gr,
+        slide_speed_mm_s=v_slide, slide_time_s=slide_time,
+        energy_threshold_mpa_mm=hp.hardness_mpa * hp.critical_depth_mm(),
+        elements_per_dc=p.elements_per_dc, resolves_dc=True,
+        steps=("LOAD", "SLIDE"), grain_tags=gtags,
+    )
+
+
+def demo(outdir: str = "_sagemit_demo") -> None:
+    """Write both decks from real measured grains and check what came out."""
+    import glob
+    from .quick import measure_images
+
+    os.makedirs(outdir, exist_ok=True)
+    imgs = sorted(glob.glob("B4C_1*.tif"))[:1]
+    if not imgs:
+        print("semgrit.sagemit: no B4C tif to measure; skipped")
+        return
+    got = measure_images(imgs, os.path.join(outdir, "meas"),
+                         log=lambda *a: None)
+    solids = got["solids"]
+    assert solids, "no grain solids measured"
+
+    # The 30 um pad: the sparsest of the three, so the demo's MACRO deck is
+    # the smallest that still spans the indent. A 6 um pad at the same sector
+    # is 262,000 grains, which is the right choice for a real run and far too
+    # slow for a self-check.
+    p = sagdeck.SAGParams(grain_um=30.0, material="wc_co", name="sagdemo",
+                          macro_grain_cap=2000, macro_sector_deg=17.0,
+                          micro_grains=1, grind_time_s=2.0e-5)
+    pl = sagdeck.plan(p)
+
+    mi = write_micro(os.path.join(outdir, "micro.inp"), pl, solids)
+    ma = write_macro(os.path.join(outdir, "macro.inp"), pl, solids)
+
+    for info in (mi, ma):
+        txt = open(info["path"], encoding="ascii").read()
+        # every deck must be explicit, general-contact, and say which
+        assert "*Dynamic, Explicit" in txt
+        assert "*Contact, op=NEW" in txt and "ALL EXTERIOR" in txt
+        assert "*Contact Pair" not in txt, "pairs cannot see deleted faces"
+        assert "constants=58" in txt, "the energy criterion needs 58"
+        assert "*Depvar, delete=12" in txt
+        # balanced parts and steps
+        assert txt.count("*Part,") == txt.count("*End Part")
+        assert txt.count("*Step,") == txt.count("*End Step")
+        assert txt.count("*Assembly") == txt.count("*End Assembly")
+        assert txt.count("*Instance,") == txt.count("*End Instance")
+        # no unresolved format placeholders
+        assert "%s" not in txt and "%.4" not in txt
+        # the material card must be 8 per line
+        for ln in txt.splitlines():
+            if ln and ln[0].isdigit() and ln.count(",") == 7:
+                break
+
+    # MICRO: three steps' worth of physics in two, and it must SLIDE
+    mtxt = open(mi["path"], encoding="ascii").read()
+    assert mtxt.count("*Step,") == 2
+    assert "name=LOAD" in mtxt and "name=SLIDE" in mtxt
+    assert "*Cload" in mtxt, "the grain is driven by force, not displacement"
+    assert "type=VELOCITY" in mtxt, "the slide must be a velocity"
+    assert "PLOT SDV13" in mtxt
+    assert mi["resolves_dc"] and mi["dc_measured"]
+    assert abs(mi["element_depth_mm"] * 1e6 - 16.0) < 1e-9
+    assert mi["element_inplane_mm"] > mi["element_depth_mm"]
+    assert mi["slide_time_s"] > 0
+
+    # MACRO: three steps, press then hold then grind, and it must NOT claim
+    # to resolve dc
+    atxt = open(ma["path"], encoding="ascii").read()
+    assert atxt.count("*Step,") == 3
+    for nm in ("name=PRESS", "name=HOLD", "name=GRIND"):
+        assert nm in atxt, nm
+    assert atxt.index("name=PRESS") < atxt.index("name=HOLD") \
+        < atxt.index("name=GRIND"), "the steps must be in physical order"
+    assert "*Rigid Body" in atxt and "*Tie" in atxt
+    assert "CANNOT show a ductile-brittle transition" in atxt
+    assert not ma["resolves_dc"]
+    # press must be a velocity, and the value must match the plan
+    assert "type=VELOCITY" in atxt
+    assert _fmt(-ma["press_velocity_mm_s"]) in atxt
+    # the tool must be seated at first contact, not overlapping
+    assert ma["tool_centre_y_mm"] > 0.5 * p.diameter_mm
+    assert abs(ma["tool_centre_y_mm"] - 0.5 * p.diameter_mm
+               - ma["tallest_protrusion_mm"]) < 1e-12
+    # a compliant layer that must BEND needs several elements through it
+    assert ma["n_rad_pu"] >= 6, ma["n_rad_pu"]
+    # and the faceted arc must be fine compared with the compression, or the
+    # contact sees a polygon instead of a cylinder
+    import math as _m
+    chord = 2.0 * (0.5 * p.diameter_mm) * _m.sin(
+        _m.radians(ma["sector_deg"]) / (2.0 * ma["n_circ"]))
+    sagitta = (0.5 * p.diameter_mm) * (1.0 - _m.cos(
+        _m.radians(ma["sector_deg"]) / (2.0 * ma["n_circ"])))
+    assert sagitta < 0.02 * p.compression_mm, (sagitta, p.compression_mm)
+
+    # refusals
+    for bad, why in ((lambda: write_micro(os.path.join(outdir, "x.inp"),
+                                          pl, []), "no grains"),
+                     (lambda: write_macro(os.path.join(outdir, "x.inp"),
+                                          pl, []), "no grains")):
+        try:
+            bad()
+        except SAGWriteError:
+            pass
+        else:
+            raise AssertionError("should have been refused: %s" % why)
+
+    print("semgrit.sagemit: all checks passed")
+    print("  MICRO  %s  %s el, %d grain(s), %.1f nm depth element, %.2f MB"
+          % (os.path.basename(mi["path"]), format(mi["elements"], ","),
+             mi["grains"], mi["element_depth_mm"] * 1e6, mi["bytes"] / 1e6))
+    print("         driven by %.4e N, slides %.1f mm/s for %.3e s"
+          % (mi["load_per_grain_n"], mi["slide_speed_mm_s"],
+             mi["slide_time_s"]))
+    print("  MACRO  %s  %s el (%s PU, %s work), %s grains, %.2f MB"
+          % (os.path.basename(ma["path"]), format(ma["elements"], ","),
+             format(ma["pu_elements"], ","), format(ma["work_elements"], ","),
+             format(ma["grains"], ","), ma["bytes"] / 1e6))
+    print("         sector %.3f deg, %d circ x %d rad, press %.1f mm/s"
+          % (ma["sector_deg"], ma["n_circ"], ma["n_rad_pu"],
+             ma["press_velocity_mm_s"]))
+
+
+if __name__ == "__main__":
+    demo()

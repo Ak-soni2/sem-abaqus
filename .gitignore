@@ -211,3 +211,14 @@ _caddrive.*
 SHAPE ADAPTIVE GRINDING/*.inp
 SHAPE ADAPTIVE GRINDING/_paper.txt
 SHAPE ADAPTIVE GRINDING/_ppt.txt
+
+# SAG decks and scratch. The MACRO deck is ~150 MB (2.3 M rigid grain facets
+# on a 17 deg sector at the real pad density), over GitHub's limit and
+# regenerable:
+#     python -m semgrit.sagemit          # a demo pair
+#     python verify_sag_deck.py --build  # a pair, then verify both
+RUN_SAG/**/*.inp
+_sagverify/
+_sagemit_demo/
+_sagm/
+_sagmeas/

@@ -194,10 +194,24 @@ class SAGParams:
     micro_patch_mm: float = 0.0
     """Side of the resolved MICRO patch. 0 -> sized from the grain count."""
     micro_grains: int = 3
-    macro_grain_cap: int = 5000
-    """Most grains the MACRO deck will place. At 121 facets each, 5,000 grains
-    is 605,000 general-contact facets -- already large, and the existing
-    multi-abrasive deck runs 12. Raise it knowingly."""
+    macro_grain_cap: int = 400_000
+    """Most grains the MACRO deck will place, and it is deliberately large.
+
+    A cap is honoured by NARROWING THE SECTOR, never by thinning the pad, so a
+    small cap does not give a cheap approximation of the real contact -- it
+    gives a narrow sector whose own curvature cannot span the indent, i.e. a
+    flat punch. At T = 0.4 mm on a 62.5 mm radius the sector must be at least
+    12.97 deg, and a 6 um pad at 1,400 grains/mm2 puts ~262,000 grains in the
+    17 deg the contact arc wants. At 121 facets each that is ~32 M
+    general-contact facets, which is expensive and is what fidelity costs here.
+
+    Lower it only if a narrow, non-contacting sector is genuinely what is
+    wanted -- ``plan`` reports ``spans_indent`` so that choice is visible."""
+    macro_sector_mode: str = "contact"
+    """``contact`` sizes the sector to the arc that actually touches, which is
+    the physically correct choice and the default. ``cap`` sizes it to whatever
+    ``macro_grain_cap`` allows, which is cheaper and can be too flat to make
+    contact at all -- ``plan`` reports ``spans_indent`` either way."""
     macro_sector_deg: float = 0.0
     """Sector of wheel to model. 0 -> the smallest sector that holds the cap.
     A full wheel is never right here: at 1,400 grains/mm2 a 125 mm wheel with a
@@ -222,6 +236,10 @@ class SAGParams:
                 "The project standard is 5." % self.elements_per_dc)
         if self.micro_grains < 1:
             raise SAGDeckError("the MICRO deck needs at least one grain")
+        if self.macro_sector_mode not in ("contact", "cap"):
+            raise SAGDeckError(
+                "macro_sector_mode must be 'contact' or 'cap', not %r"
+                % (self.macro_sector_mode,))
         if self.elements_per_grain < 6.0:
             raise SAGDeckError(
                 "elements_per_grain = %g cannot carry a grain's shape in-plane"
@@ -360,15 +378,51 @@ def plan(p: SAGParams) -> dict:
     pad_area_full = math.pi * p.diameter_mm * p.width_mm
     dens = p.tool().pad.active_per_mm2
     grains_full = dens * pad_area_full
+    # The sector has to be wide enough that its OWN CURVATURE spans the
+    # indent. A sector of angle s has sagitta R(1 - cos(s/2)); if that is less
+    # than the wheel compression T, the modelled arc is effectively flat and
+    # the deck describes a flat punch pressed into the work, not a wheel. On a
+    # 62.5 mm radius at T = 0.4 mm that needs s >= 12.97 deg.
+    #
+    # Worth noting: the paper's MEASURED spot length gives a contact arc of
+    # 14.29 deg at the same setting, so the geometric requirement and the
+    # experiment agree to 10% by two unrelated routes.
+    r_out = 0.5 * p.diameter_mm
+    ratio = 1.0 - p.compression_mm / r_out
+    sector_min_deg = (2.0 * math.degrees(math.acos(max(-1.0, ratio)))
+                      if ratio > -1.0 else 360.0)
+    contact_arc_deg = 2.0 * math.degrees(math.asin(
+        min(contact.spot_length_mm / p.diameter_mm, 1.0)))
+
     if p.macro_sector_deg > 0:
         sector_deg = min(p.macro_sector_deg, 360.0)
+    elif p.macro_sector_mode == "contact":
+        # The physically right answer: model the arc that actually touches,
+        # with a little margin so the patch is not clipped by the cut faces.
+        sector_deg = min(360.0, max(contact_arc_deg * 1.2, sector_min_deg))
     else:
         need_area = p.macro_grain_cap / dens if dens > 0 else pad_area_full
         sector_deg = min(360.0, 360.0 * need_area / pad_area_full)
     sector_area = pad_area_full * sector_deg / 360.0
     sector_grains = int(round(dens * sector_area))
     sector_arc_mm = math.pi * p.diameter_mm * sector_deg / 360.0
+
+    # Under-populating the pad is NOT a harmless economy. The contact load is
+    # shared among the grains that are actually there, so placing 5,000 of the
+    # 261,877 a 17 deg sector really holds makes the force per grain 52x too
+    # high -- and that force is the single number coupling MACRO to MICRO. So
+    # a cap is only honoured by NARROWING THE SECTOR to match it, never by
+    # thinning the pad within a sector.
     capped = sector_grains > p.macro_grain_cap
+    if capped and p.macro_sector_deg <= 0:
+        sector_deg = min(sector_deg,
+                         360.0 * (p.macro_grain_cap / dens) / pad_area_full)
+        sector_area = pad_area_full * sector_deg / 360.0
+        sector_grains = int(round(dens * sector_area))
+        sector_arc_mm = math.pi * p.diameter_mm * sector_deg / 360.0
+    grains_placed = sector_grains
+    density_honoured = abs(
+        grains_placed / max(sector_area, 1e-30) - dens) / dens < 0.02
 
     return dict(
         params=p,
@@ -396,12 +450,19 @@ def plan(p: SAGParams) -> dict:
             grains_in_contact=int(round(contact.active_grains)),
             sector_deg=sector_deg, sector_area_mm2=sector_area,
             sector_arc_mm=sector_arc_mm,
-            grains=min(sector_grains, p.macro_grain_cap),
-            grain_facets=int(round(min(sector_grains, p.macro_grain_cap)
-                                   * FACETS_PER_GRAIN)),
+            grains=grains_placed,
+            grain_facets=int(round(grains_placed * FACETS_PER_GRAIN)),
+            density_honoured=density_honoured,
+            grains_per_mm2=grains_placed / max(sector_area, 1e-30),
+            pad_density_per_mm2=dens,
             capped=capped, grain_cap=p.macro_grain_cap,
-            contact_arc_deg=2.0 * math.degrees(math.asin(
-                min(contact.spot_length_mm / p.diameter_mm, 1.0))),
+            contact_arc_deg=contact_arc_deg,
+            sector_min_deg=sector_min_deg,
+            sector_sagitta_mm=r_out * (1.0 - math.cos(
+                math.radians(sector_deg) / 2.0)),
+            spans_indent=(r_out * (1.0 - math.cos(math.radians(sector_deg)
+                                                  / 2.0))
+                          >= p.compression_mm),
             resolves_dc=False,
         ),
         micro=dict(
@@ -645,6 +706,61 @@ def demo() -> None:
     # the MACRO deck must declare it cannot resolve dc, and the number that
     # justifies that must be genuinely enormous
     assert pl["macro"]["resolves_dc"] is False
+    mac = pl["macro"]
+    assert mac["sector_deg"] < 360.0, "MACRO must be a sector, not the wheel"
+    assert mac["grains_on_full_pad"] > 1e6, mac["grains_on_full_pad"]
+    assert mac["grains"] <= p.macro_grain_cap
+    assert abs(mac["grain_facets"] - mac["grains"] * FACETS_PER_GRAIN) < 1.0
+
+    # THE SECTOR MUST BE ABLE TO MAKE CONTACT. A sector of angle s has its own
+    # sagitta R(1 - cos(s/2)); below the wheel compression the modelled arc is
+    # effectively flat, and the deck describes a flat punch, not a wheel.
+    assert mac["spans_indent"], (mac["sector_deg"], mac["sector_sagitta_mm"])
+    assert mac["sector_sagitta_mm"] >= p.compression_mm
+    assert mac["sector_deg"] >= mac["sector_min_deg"]
+    # The geometric minimum must agree with the paper's MEASURED contact arc.
+    # Two unrelated routes to the same angle, so this is a real cross-check on
+    # the empirical fits rather than a restatement of them.
+    assert abs(mac["sector_min_deg"] - mac["contact_arc_deg"]) \
+        / mac["contact_arc_deg"] < 0.15, (mac["sector_min_deg"],
+                                          mac["contact_arc_deg"])
+
+    # THE PAD DENSITY MUST NEVER BE THINNED. A cap is honoured by narrowing the
+    # sector; placing fewer grains than the sector holds would share the same
+    # contact load among fewer carriers and make the per-grain force -- the one
+    # number coupling MACRO to MICRO -- wrong in proportion. A 5,000-grain cap
+    # on a 17 deg sector would have made it 52x too high.
+    assert mac["density_honoured"], (mac["grains_per_mm2"],
+                                     mac["pad_density_per_mm2"])
+    assert abs(mac["grains_per_mm2"] - mac["pad_density_per_mm2"]) \
+        / mac["pad_density_per_mm2"] < 0.02
+
+    tight = plan(SAGParams(grain_um=6.0, macro_grain_cap=5000))
+    assert tight["macro"]["grains"] <= 5000
+    assert tight["macro"]["sector_deg"] < mac["sector_deg"], \
+        "a cap must narrow the sector, not thin the pad"
+    assert tight["macro"]["density_honoured"], "the pad was thinned"
+    assert not tight["macro"]["spans_indent"], \
+        "and a 5,000-grain sector is honestly reported as too flat to contact"
+
+    # an explicit sector is honoured even when it cannot contact -- but said so
+    fixed = plan(SAGParams(grain_um=6.0, macro_sector_deg=1.0,
+                           macro_grain_cap=10 ** 9))
+    assert abs(fixed["macro"]["sector_deg"] - 1.0) < 1e-9
+    assert not fixed["macro"]["spans_indent"]
+
+    # every pad size must reach a contacting sector at the default cap
+    for dg in (6.0, 15.0, 30.0):
+        q = plan(SAGParams(grain_um=dg))["macro"]
+        assert q["spans_indent"], dg
+        assert q["density_honoured"], dg
+
+    try:
+        SAGParams(macro_sector_mode="whatever")
+    except SAGDeckError:
+        pass
+    else:
+        raise AssertionError("an unknown sector mode must be refused")
     assert pl["infeasible"]["full_patch_elements"] > 1e9
 
     # the MICRO patch must be a real sample: the grains it claims must be what
