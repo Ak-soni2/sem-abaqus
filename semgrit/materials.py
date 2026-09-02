@@ -120,16 +120,34 @@ class Workpiece:
             lambda_c=self.dc.get("lambda_c", 0.15),
             placeholder=self.placeholder,
         )
+        # A MEASURED dc wins over any formula. HybridParams.critical_depth_mm
+        # already prefers dc_mm when it is positive; it just has to be carried
+        # across. Without this a material whose dc was measured rather than
+        # computed would be silently overridden by the formula it disagrees
+        # with -- which is exactly the WC-Co case, where Bifano is 17x out.
+        if self.dc.get("dc_mm", 0.0) > 0:
+            kw["dc_mm"] = float(self.dc["dc_mm"])
         kw.update(over)
         p = HybridParams(**kw)
         p.validate()
         return p
 
     def dc_nm(self, form: int = 0) -> float:
+        """dc in nm. ``form=0`` is what the deck will use -- a measured
+        ``dc_mm`` if this material has one, else the card's own form.
+        ``form=1`` or ``2`` asks what that FORMULA would give, ignoring any
+        measurement, which is how a disagreement gets reported instead of
+        hidden."""
         p = self.hybrid_params()
         if form:
-            p = HybridParams(**{**p.__dict__, "dc_form": form})
+            # drop the measured value so the formula is actually exercised
+            p = HybridParams(**{**p.__dict__, "dc_form": form, "dc_mm": 0.0})
         return p.critical_depth_mm() * 1e6
+
+    @property
+    def dc_measured(self) -> bool:
+        """True when dc came from experiment rather than a formula."""
+        return self.dc.get("dc_mm", 0.0) > 0
 
 
 MATERIALS: dict[str, Workpiece] = {}
@@ -256,6 +274,92 @@ _add(Workpiece(
 ))
 
 
+# ---------------------------------------------------------------------------
+# WC-12Co, HVOF-sprayed coating -- the shape-adaptive-grinding material
+#
+# From Ghosh, Sidpara & Bandyopadhyay (2021), IJRMHM 99, 105610, which is the
+# SAG reference paper. Its Table 2 gives the three properties dc needs, all
+# measured on the actual coating:
+#
+#     microhardness      11.02 +- 1.2  GPa
+#     elastic modulus     200  +- 21   GPa
+#     fracture toughness    7.78 +- 0.9 MPa*m^0.5
+#
+# and its section 4.2 measures the transition itself: chips of 60-100 nm at
+# pure ductile removal, so dc = 60-100 nm.
+#
+# THAT MEASURED dc IS SET EXPLICITLY HERE, because Bifano's expression is wrong
+# for this material and the paper says so. On these same inputs form 2 returns
+# 1.357 um -- 17x the measured 80 nm midpoint. The paper's reasons: a thermally
+# sprayed coating is not sintered bulk (splat boundaries, 1.5% porosity,
+# decarburisation); WC-Co is multiphase, hard WC in ductile Co, which one
+# (E, H, Kc) triple cannot represent; and WC grains are anisotropic. Setting
+# dc_mm from the measurement is the only honest option, and dc_form stays on
+# the card so the disagreement can still be reported. semgrit.sag.dc_report
+# prints both side by side.
+#
+# The JH-2 card is DERIVED, not published. K1 and G are exactly the paper's
+# E = 200 GPa with nu = 0.22 for cemented carbide, so both branches share one
+# elasticity. HEL = 0.6 H is the usual cemented-carbide ratio, PHEL follows
+# from uniaxial strain at the HEL, and SIGHEL = 1.5 (HEL - PHEL) is the JH-2
+# identity the validator checks. A, B, C, N, M, beta and D1, D2 are
+# order-of-magnitude values for a hard cermet and are PLACEHOLDERS.
+# ---------------------------------------------------------------------------
+
+JH2_WC_CO = (
+    119048.0,   # K1      from E = 200 GPa, nu = 0.22
+    81967.0,    # G       same
+    6612.0,     # HEL     0.6 * 11.02 GPa microhardness
+    3447.0,     # PHEL    HEL (1+nu) / (3(1-nu))
+    1000.0,     # T       ~1 GPa transverse rupture, and below PHEL
+    0.95,       # A       PLACEHOLDER
+    0.30,       # B       PLACEHOLDER
+    0.009,      # C       PLACEHOLDER
+    0.65,       # N       PLACEHOLDER
+    0.85,       # M       PLACEHOLDER
+    1.0,        # beta    full bulking
+    0.02,       # D1      PLACEHOLDER
+    1.0,        # D2      PLACEHOLDER
+    0.0,        # K2
+    0.0,        # K3
+    0.5,        # SFMAX   normalised
+    4747.5,     # SIGHEL  1.5*(HEL-PHEL), the JH-2 identity
+)
+
+_add(Workpiece(
+    key="wc_co",
+    label="WC-12Co, HVOF-sprayed coating (SAG reference material)",
+    inp_material="WCCO",
+    jh2=JH2_WC_CO,
+    density_kg_m3=14500.0,          # WC-12Co, ~1.5% porosity
+    jc=dict(
+        b_mpa=1200.0, n=0.30, c=0.012, m=1.0, edot0=1.0,
+        youngs_mpa=200000.0, poisson=0.22,
+        specific_heat_j_kgk=240.0, taylor_quinney=0.9,
+        t0_k=293.15, tmelt_k=1768.15,   # Co binder melts ~1495 C
+        burgers_mm=2.9e-7,              # WC a = 0.2906 nm
+        taylor_factor=3.0, alpha=0.3, sge_exponent=1.0,
+        r_prime=2.0, sge_shear_mpa=0.0,
+        d1=0.0, d2=0.15, d3=-1.5, d4=0.0, d5=0.0, dcrit=1.0,
+    ),
+    dc=dict(hardness_mpa=11020.0, kic_mpa_sqrt_m=7.78, dc_form=2,
+            # MEASURED, not computed. The midpoint of the paper's 60-100 nm.
+            dc_mm=80.0e-6),
+    notes=(
+        "dc = 80 nm is MEASURED (paper section 4.2: 60-100 nm chips at pure",
+        "ductile removal), not computed. Bifano's form 2 on this card's own",
+        "H, E and Kc returns 1.357 um -- 17x too large -- because a sprayed",
+        "multiphase coating is not sintered bulk. semgrit.sag.dc_report shows",
+        "both. H, E and Kc are the paper's measured Table 2 values.",
+        "The JH-2 card is DERIVED from E and H, not published: K1 and G are",
+        "exactly E = 200 GPa with nu = 0.22. A, B, C, N, M, D1, D2 and the",
+        "Johnson-Cook constants other than A are PLACEHOLDERS.",
+        "Mean WC carbide size is 1.36 um, which matters for the paper's",
+        "second criterion, k = dg/D_WC < 5 for pure ductile removal.",
+    ),
+))
+
+
 def get(key: str) -> Workpiece:
     try:
         return MATERIALS[key]
@@ -337,10 +441,24 @@ def demo() -> None:
     # of the bisection, so it is a real check and not a restatement.
     assert abs(p.a_mpa - p.hardness_mpa / 3.0) / (p.hardness_mpa / 3.0) < 0.05
 
-    # dc has to sit where a mesh can resolve it. Both materials land in tens of
-    # nanometres on form 2, which is why the same graded mesh serves both.
+    # dc has to sit where a mesh can resolve it. Every material lands in tens
+    # of nanometres, which is why the same graded mesh serves all of them.
+    # Test the dc the DECK will use, not one particular formula: WC-Co's deck
+    # value is a measured 80 nm while Bifano on the same card returns 1.357 um,
+    # and asserting the formula here would fail on the one material where the
+    # formula is known to be wrong.
     for k in MATERIALS:
-        assert 10.0 < get(k).dc_nm(2) < 500.0, k
+        assert 10.0 < get(k).dc_nm() < 500.0, (k, get(k).dc_nm())
+
+    # And the WC-Co disagreement itself, since it is a result rather than an
+    # accident: Bifano must be an order of magnitude above the measurement.
+    wc = get("wc_co")
+    assert wc.dc_measured
+    assert math.isclose(wc.dc_nm(), 80.0)
+    assert 10.0 < wc.dc_nm(2) / wc.dc_nm() < 25.0, wc.dc_nm(2) / wc.dc_nm()
+    # the other two are formula-derived and must stay that way
+    assert not get("sandstone").dc_measured
+    assert not get("silicon_carbide").dc_measured
 
     # Unit tripwires. Each of these is a mistake that produces a deck that
     # runs and is wrong.
