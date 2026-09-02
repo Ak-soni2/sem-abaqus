@@ -364,8 +364,36 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
         chk("three steps, in the order press, hold, grind",
             names == ["PRESS", "HOLD", "GRIND"], "%s" % names)
     else:
-        chk("two steps: load then slide", names == ["LOAD", "SLIDE"],
-            "%s" % names)
+        chk("a load step followed by repeated passes",
+            len(names) >= 3 and names[0] == "LOAD"
+            and all(n == "PASS%d" % i
+                    for i, n in enumerate(names[1:], start=1)),
+            "%d passes: %s" % (len(names) - 1,
+                               ", ".join(names[:3]) + (" ..." if len(names) > 3
+                                                       else "")))
+        # The passes must ALTERNATE direction. A grain that only ever slides
+        # forward runs down a fresh track, so every point it crosses sees
+        # exactly ONE pass and the energy criterion can never trip -- however
+        # many steps there are. Reversing keeps it over the same material,
+        # which is what a polishing pad does.
+        vx = []
+        for st in d.steps[1:]:
+            for kwd, pars, data, _ in st["blocks"]:
+                if kwd != "boundary":
+                    continue
+                if str(pars.get("type", "")).lower() != "velocity":
+                    continue
+                for ln in data:
+                    f = [x.strip() for x in ln.split(",")]
+                    if len(f) >= 4 and f[1] == "1" and f[3]:
+                        vx.append(float(f[3]))
+        flips = sum(1 for i in range(len(vx) - 1)
+                    if vx[i] * vx[i + 1] < 0)
+        chk("the passes alternate direction, so they retrace one track",
+            len(vx) >= 2 and flips == len(vx) - 1,
+            "%d pass velocities, %d reversals -- a one-way slide would leave "
+            "every point with a single pass and could never accumulate to "
+            "the threshold" % (len(vx), flips))
         chk("the grain is driven by a force, not a prescribed depth",
             bool(d.kw("cload")),
             "the indentation is what the deck predicts, so imposing it "

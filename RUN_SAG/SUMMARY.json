@@ -1,0 +1,139 @@
+{
+ "paper": {
+  "citation": "Ghosh, Sidpara & Bandyopadhyay (2021), Int. J. Refractory Metals and Hard Materials 99, 105610",
+  "wheel_diameter_mm": 125.0,
+  "wheel_width_mm": 10.0,
+  "feed_mm_min": 15.0,
+  "speeds_rpm": [
+   300.0,
+   550.0,
+   800.0,
+   1050.0
+  ],
+  "compressions_mm": [
+   0.2,
+   0.4,
+   0.6
+  ],
+  "grains_um": [
+   6.0,
+   15.0,
+   30.0
+  ],
+  "coating_E_gpa": 200.0,
+  "coating_H_gpa": 11.02,
+  "coating_Kc_mpa_sqrt_m": 7.78,
+  "coating_bhn": 581.0,
+  "work_poisson": 0.25,
+  "tool_poisson": 0.24,
+  "carbide_um": 1.36,
+  "dc_measured_nm": [
+   60.0,
+   100.0
+  ],
+  "best_T_mm": 0.4,
+  "best_N_rpm": 1050.0,
+  "spot_time_s": 10.0,
+  "final_Sa_nm": 21.0,
+  "residual_mpa": -78.0,
+  "max_temp_c": 45.0
+ },
+ "c10_mpa": 0.16606,
+ "shore_equivalent": 26.8,
+ "passes": 20,
+ "decks": [
+  {
+   "grain_um": 6.0,
+   "compression_mm": 0.4,
+   "speed_rpm": 1050.0,
+   "c10_mpa": 0.16606,
+   "normal_load_n": 3.044887908699183,
+   "spot_area_mm2": 128.136439157757,
+   "active_grains": 179391.0148208598,
+   "load_per_grain_n": 1.697346944460855e-05,
+   "indentation_nm": 0.15804206364063503,
+   "groove_width_nm": 61.58660258692406,
+   "mrr_mm3_min": 0.5823810172312749,
+   "surface_speed_mm_s": 6872.233929727672,
+   "dc_nm": 80.0,
+   "h_over_dc": 0.001975525795507938,
+   "regime": "ductile",
+   "k_ratio": 4.411764705882352,
+   "k_pure_ductile": true,
+   "chip_measured_nm": [
+    60.0,
+    100.0
+   ],
+   "micro": {
+    "path": "RUN_SAG\\6um\\micro_6um.inp",
+    "elements": 483181,
+    "mb": 61.02,
+    "element_depth_nm": 16.000000000000004,
+    "slide_passes": 20,
+    "equivalent_experimental_revolutions": 175.0
+   }
+  },
+  {
+   "grain_um": 15.0,
+   "compression_mm": 0.4,
+   "speed_rpm": 1050.0,
+   "c10_mpa": 0.16606,
+   "normal_load_n": 3.044887908699183,
+   "spot_area_mm2": 128.136439157757,
+   "active_grains": 73806.58895486803,
+   "load_per_grain_n": 4.125496045564578e-05,
+   "indentation_nm": 0.15365200631728407,
+   "groove_width_nm": 96.01575882781358,
+   "mrr_mm3_min": 0.3631801263444587,
+   "surface_speed_mm_s": 6872.233929727672,
+   "dc_nm": 80.0,
+   "h_over_dc": 0.0019206500789660508,
+   "regime": "ductile",
+   "k_ratio": 11.029411764705882,
+   "k_pure_ductile": false,
+   "chip_measured_nm": [
+    160.0,
+    230.0
+   ],
+   "micro": {
+    "path": "RUN_SAG\\15um\\micro_15um.inp",
+    "elements": 191296,
+    "mb": 23.37,
+    "element_depth_nm": 16.000000000000004,
+    "slide_passes": 20,
+    "equivalent_experimental_revolutions": 175.0
+   }
+  },
+  {
+   "grain_um": 30.0,
+   "compression_mm": 0.4,
+   "speed_rpm": 1050.0,
+   "c10_mpa": 0.16606,
+   "normal_load_n": 3.044887908699183,
+   "spot_area_mm2": 128.136439157757,
+   "active_grains": 32034.109789439248,
+   "load_per_grain_n": 9.505142888980787e-05,
+   "indentation_nm": 0.1770071112775112,
+   "groove_width_nm": 145.74199129705747,
+   "mrr_mm3_min": 0.27563469518538375,
+   "surface_speed_mm_s": 6872.233929727672,
+   "dc_nm": 80.0,
+   "h_over_dc": 0.00221258889096889,
+   "regime": "ductile",
+   "k_ratio": 22.058823529411764,
+   "k_pure_ductile": false,
+   "chip_measured_nm": [
+    240.0,
+    350.0
+   ],
+   "micro": {
+    "path": "RUN_SAG\\30um\\micro_30um.inp",
+    "elements": 107604,
+    "mb": 12.78,
+    "element_depth_nm": 16.000000000000004,
+    "slide_passes": 20,
+    "equivalent_experimental_revolutions": 175.0
+   }
+  }
+ ]
+}

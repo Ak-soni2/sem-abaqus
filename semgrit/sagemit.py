@@ -449,7 +449,7 @@ def _current_part(lines: list) -> str:
 
 
 def write_micro(path: str, pl: dict, solids: Sequence, *,
-                psi: float = 0.0, seed: int = 11) -> dict:
+                psi: float = 0.0, seed: int = 11, n_passes: int = 0) -> dict:
     """The resolved deck: one patch of contact at dc/5, energy criterion.
 
     The grain is driven by a FORCE -- the per-grain load MACRO computed -- not
@@ -568,6 +568,15 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     fn = c.load_per_grain_n
     v_slide = c.surface_speed_mm_s
     slide_time = side / v_slide if v_slide > 0 else p.grind_time_s
+    # Passes needed to reach H*dc from this grain's own tangential work per
+    # pass, rounded up with a margin so the transition is bracketed rather
+    # than just touched. Derived, not chosen.
+    if n_passes <= 0:
+        w_mm = max(c.groove_width_mm, 1e-12)
+        per_pass = (p.friction * fn) / w_mm
+        need = (hp.hardness_mpa * hp.critical_depth_mm()) / max(per_pass, 1e-30)
+        n_passes = max(int(math.ceil(need * 1.5)), 2)
+    n_passes = min(n_passes, 60)
     L += ["** " + "-" * 70,
           "** STEP 1 of 2 -- press the grain on with its own share of the",
           "** contact load, %.4e N. A FORCE, not a prescribed depth: the" % fn,
@@ -591,32 +600,53 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
           "*Output, history, time interval=%s" % _fmt(slide_time * 0.001),
           "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ETOTAL",
           "*End Step"]
-    L += ["** " + "-" * 70,
-          "** STEP 2 of 2 -- SLIDE at the surface speed, %.1f mm/s." % v_slide,
-          "** This is the step that produces the result. The energy criterion",
-          "** triggers on ACCUMULATED plastic work, so the transition appears",
-          "** as the grain travels: a point starts ductile and turns brittle",
-          "** once W_p*L_c reaches H*dc. A grain that only indents and stops",
-          "** could never reach the threshold, however hard it pressed.",
-          "**",
-          "** PLOT SDV13: 1 ductile, 2 brittle. That is the result.",
-          "*Step, name=SLIDE, nlgeom=YES",
-          "*Dynamic, Explicit", ", %s" % _fmt(slide_time),
-          "*Bulk Viscosity", " 0.06, 1.2",
-          "*Boundary, op=NEW, type=VELOCITY",
-          " NS_GRAIN_REF, 1, 1, %s" % _fmt(v_slide),
-          " NS_GRAIN_REF, 2, 2, 0.", " NS_GRAIN_REF, 4, 6, 0.",
-          "*Cload, op=NEW",
-          " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
-          "*Restart, write, number interval=1, time marks=NO",
-          "*Output, field, number interval=60",
-          "*Node Output", " U, V, A, RF",
-          "*Element Output, directions=YES",
-          " S, MISES, PEEQ, LE, SDV, STATUS, EVOL",
-          "*Contact Output", " CSTRESS, CDISP, CFORCE, CSTATUS",
-          "*Output, history, time interval=%s" % _fmt(slide_time * 0.001),
-          "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ETOTAL",
-          "*End Step"]
+    # REPEATED passes over the SAME track, not one long slide down a fresh
+    # one. This is the correction that makes the deck able to reproduce the
+    # experiment at all: the criterion accumulates work PER POINT, so a grain
+    # sliding along virgin material leaves every point with exactly one pass
+    # and can never trip the threshold however far it goes. The paper's spot
+    # test accumulates because ~20,000 grain crossings pass over each point in
+    # 10 s; on this material 7-16 passes reach H*dc, so a handful of repeats
+    # spans the transition.
+    for ip in range(1, n_passes + 1):
+        first = ip == 1
+        L += ["** " + "-" * 70,
+              "** PASS %d of %d over the SAME track, at %.1f mm/s."
+              % (ip, n_passes, v_slide)]
+        if first:
+            L += ["**",
+                  "** The energy criterion accumulates plastic work PER POINT,"
+                  " so a",
+                  "** single pass along fresh material cannot trip it: every"
+                  " point",
+                  "** it crosses has seen exactly one pass. Repeating over one"
+                  " track",
+                  "** is what a polishing pad actually does -- the paper's"
+                  " 10 s spot",
+                  "** test puts ~20,000 grain crossings over each point -- and"
+                  " on",
+                  "** this material 7-16 passes reach H*dc.",
+                  "**",
+                  "** PLOT SDV13: 1 ductile, 2 brittle. Watch it evolve pass"
+                  " by pass;",
+                  "** the pass at which it flips is the result."]
+        L += ["*Step, name=PASS%d, nlgeom=YES" % ip,
+              "*Dynamic, Explicit", ", %s" % _fmt(slide_time),
+              "*Bulk Viscosity", " 0.06, 1.2",
+              "*Boundary, op=NEW, type=VELOCITY",
+              " NS_GRAIN_REF, 1, 1, %s" % _fmt(v_slide if ip % 2 else -v_slide),
+              " NS_GRAIN_REF, 2, 2, 0.", " NS_GRAIN_REF, 4, 6, 0.",
+              "*Cload, op=NEW",
+              " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
+              "*Restart, write, number interval=1, time marks=NO",
+              "*Output, field, number interval=20",
+              "*Node Output", " U, V, A, RF",
+              "*Element Output, directions=YES",
+              " S, MISES, PEEQ, LE, SDV, STATUS, EVOL",
+              "*Contact Output", " CSTRESS, CDISP, CFORCE, CSTATUS",
+              "*Output, history, time interval=%s" % _fmt(slide_time * 0.01),
+              "*Energy Output", " ALLIE, ALLKE, ALLAE, ALLPD, ETOTAL",
+              "*End Step"]
 
     with open(path, "w", encoding="ascii", newline="\n") as fh:
         fh.write("\n".join(L) + "\n")
@@ -632,9 +662,12 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         dc_measured=w.dc_measured, psi=psi, swmode=1,
         load_per_grain_n=fn, total_load_n=fn * n_gr,
         slide_speed_mm_s=v_slide, slide_time_s=slide_time,
+        n_passes=n_passes, total_time_s=slide_time * (n_passes + 0.2),
         energy_threshold_mpa_mm=hp.hardness_mpa * hp.critical_depth_mm(),
         elements_per_dc=p.elements_per_dc, resolves_dc=True,
-        steps=("LOAD", "SLIDE"), grain_tags=gtags,
+        steps=tuple(["LOAD"] + ["PASS%d" % i
+                                for i in range(1, n_passes + 1)]),
+        grain_tags=gtags,
     )
 
 
@@ -685,13 +718,31 @@ def demo(outdir: str = "_sagemit_demo") -> None:
             if ln and ln[0].isdigit() and ln.count(",") == 7:
                 break
 
-    # MICRO: three steps' worth of physics in two, and it must SLIDE
+    # MICRO: load, then REPEATED passes over the same track
     mtxt = open(mi["path"], encoding="ascii").read()
-    assert mtxt.count("*Step,") == 2
-    assert "name=LOAD" in mtxt and "name=SLIDE" in mtxt
+    assert mi["n_passes"] >= 2, mi["n_passes"]
+    assert mtxt.count("*Step,") == 1 + mi["n_passes"]
+    assert "name=LOAD" in mtxt
+    for i in range(1, mi["n_passes"] + 1):
+        assert "name=PASS%d" % i in mtxt, i
     assert "*Cload" in mtxt, "the grain is driven by force, not displacement"
     assert "type=VELOCITY" in mtxt, "the slide must be a velocity"
     assert "PLOT SDV13" in mtxt
+    # The passes must ALTERNATE direction, so the grain returns over the same
+    # track instead of running away down a fresh one.
+    fwd = mtxt.count(" NS_GRAIN_REF, 1, 1, %s" % _fmt(mi["slide_speed_mm_s"]))
+    rev = mtxt.count(" NS_GRAIN_REF, 1, 1, %s" % _fmt(-mi["slide_speed_mm_s"]))
+    assert fwd >= 1 and rev >= 1, (fwd, rev)
+    assert abs(fwd - rev) <= 1, (fwd, rev)
+    # The pass count must be DERIVED from the work needed, not chosen: it has
+    # to be enough that the accumulated tangential work reaches H*dc.
+    from . import materials as _m
+    _hp = _m.get(p.material).hybrid_params()
+    _need = _hp.hardness_mpa * _hp.critical_depth_mm()
+    _per = (p.friction * mi["load_per_grain_n"]) / (
+        pl["contact"].groove_width_mm)
+    assert mi["n_passes"] * _per >= _need, \
+        "the passes must accumulate enough work to reach the threshold"
     assert mi["resolves_dc"] and mi["dc_measured"]
     assert abs(mi["element_depth_mm"] * 1e6 - 16.0) < 1e-9
     assert mi["element_inplane_mm"] > mi["element_depth_mm"]
