@@ -203,3 +203,11 @@ $RECYCLE.BIN/
 _cadshot_*.png
 _cadcheck_*
 _caddrive.*
+
+# The SAG reference deck: 135 MB, over GitHub's 100 MB hard limit. It is an
+# INPUT (hand-built in CAE by the user), not generated output, so nothing can
+# rebuild it -- keep the local copy. Its full analysis is in SAG_CONTEXT.md.
+# The paper PDF and the PPTX are tracked: they are small and are the sources.
+SHAPE ADAPTIVE GRINDING/*.inp
+SHAPE ADAPTIVE GRINDING/_paper.txt
+SHAPE ADAPTIVE GRINDING/_ppt.txt
