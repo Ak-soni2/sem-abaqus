@@ -64,6 +64,21 @@ SURF_PU_OUTER = "SURF_PU_OUTER"
 SURF_HUB_OUTER = "SURF_HUB_OUTER"
 SURF_PU_BORE = "SURF_PU_BORE"
 
+STANDOFF_FRACTION = 0.05
+"""How far clear of the surface a MICRO grain starts, as a fraction of the
+INDENTATION it will be pushed to.
+
+Small enough that closing it is a negligible part of the ramp, large enough
+that the grain is not already interpenetrating at t = 0 -- an initial
+overclosure is an impulse the contact algorithm must resolve before anything
+physical happens.
+
+It has to be a fraction of the indentation and NOT of the block depth. Those
+are five orders apart here: 2% of a 1.6 um block is 32 nm against a 0.16 nm
+indentation, so the grain started 200x further out than it could ever travel
+and the job ran with nothing ever touching. Kinetic and internal energy stayed
+identically zero for the whole step, which is how it was caught."""
+
 
 def _surface_from_quads(name: str, elset: str, face: str) -> list:
     """A surface named by element set and face code (S1..S6)."""
@@ -483,6 +498,13 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     if abs(vol - want) / want > 1e-6:
         raise SAGWriteError("mesh volume %.6g != block %.6g" % (vol, want))
 
+    # Needed before the grains are seated: the standoff is a fraction of
+    # this, so it has to exist first.
+    indent_mm = c.indentation_nm * 1e-6
+    if indent_mm <= 0:
+        raise SAGWriteError(
+            "the contact model predicts a non-positive indentation "
+            "(%g nm), so there is no depth to impose" % c.indentation_nm)
     n_gr = max(int(mic["grains"]), 1)
     # Diamond, as a sphere of the nominal grain size. Only used for the *Mass
     # card; the dynamics are displacement-controlled.
@@ -504,7 +526,11 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         y = rng.uniform(-0.35 * side, 0.35 * side)
         blk[:, 0] += x
         blk[:, 1] += y
-        blk[:, 2] += -blk[:, 2].min() + 0.02 * mic["depth_mm"]
+        # Just clear of the surface -- a fraction of the
+        # INDENTATION, not of the block depth. See
+        # STANDOFF_FRACTION for why that distinction matters.
+        blk[:, 2] += (-blk[:, 2].min()
+                      + STANDOFF_FRACTION * indent_mm)
         gv[sl] = blk
         gtags[i].update(x_mm=x, y_mm=y)
 
@@ -577,11 +603,6 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     # the energy criterion triggers on history, so a grain that only indents
     # and stops can never reach the threshold no matter how hard it presses.
     fn = c.load_per_grain_n
-    indent_mm = c.indentation_nm * 1e-6
-    if indent_mm <= 0:
-        raise SAGWriteError(
-            "the contact model predicts a non-positive indentation (%g nm), "
-            "so there is no depth to impose" % c.indentation_nm)
     v_slide = c.surface_speed_mm_s
     slide_time = side / v_slide if v_slide > 0 else p.grind_time_s
     # Passes needed to reach H*dc from this grain's own tangential work per
@@ -708,6 +729,8 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         load_per_grain_n=fn, total_load_n=fn * n_gr,
         slide_speed_mm_s=v_slide, slide_time_s=slide_time,
         indentation_mm=indent_mm, indentation_nm=c.indentation_nm,
+        standoff_mm=STANDOFF_FRACTION * indent_mm,
+        standoff_over_indent=STANDOFF_FRACTION,
         grain_mass_tonne=grain_mass_t, driven="displacement",
         n_passes=n_passes, total_time_s=slide_time * (n_passes + 0.2),
         energy_threshold_mpa_mm=hp.hardness_mpa * hp.critical_depth_mm(),
@@ -785,6 +808,13 @@ def demo(outdir: str = "_sagemit_demo") -> None:
     assert mi["driven"] == "displacement"
     assert mi["indentation_nm"] > 0
     assert mi["grain_mass_tonne"] > 0
+    # The grain must START clear of the work but be able to
+    # REACH it. A standoff larger than the indentation leaves
+    # the ramp finishing with the grain still in mid-air, and
+    # the job then runs to completion having touched nothing.
+    assert 0 < mi["standoff_mm"] < mi["indentation_mm"], \
+        (mi["standoff_mm"], mi["indentation_mm"])
+    assert mi["standoff_over_indent"] < 0.5
     # and every later step must HOLD that depth with a zero velocity rather
     # than re-imposing a displacement, which would be measured from the
     # original position and retract the grain

@@ -31,6 +31,13 @@ The material card. 58 constants (not 56), SWMODE = 1, and the energy threshold
 ``H*dc``. Since dc for WC-Co is MEASURED, this is where a deck that quietly fell
 back on Bifano's 17x-too-large value would be caught.
 
+A GRAIN THAT NEVER REACHES THE WORK. The MICRO deck seats the grain clear of
+the surface and pushes it in by the predicted indentation. If the standoff
+exceeds that indentation the ramp ends with the grain in mid-air, and the job
+runs to completion having touched nothing -- no error, just zero energy
+throughout. The standoff was once 2% of the block depth against a nanometre
+indentation, so it was 200x the travel.
+
 RIGID BODIES THAT CANNOT MOVE. A rigid part made of R3D3 facets has no
 volume and therefore no mass, so a free translational dof driven by a force
 makes a = F/m undefined and Abaqus refuses at the packager. This deck shipped
@@ -489,6 +496,60 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
                 % (hold, hold / timing["prony_tau_s"]))
 
 
+def check_reachable(d: Deck) -> None:
+    """Can the grain actually reach the workpiece?
+
+    A MICRO deck seats the grain a little clear of the surface and then pushes
+    it in by the predicted indentation. If that standoff is LARGER than the
+    indentation, the ramp finishes with the grain still in mid-air: the job
+    runs to completion, writes a full .odb, and touches nothing. There is no
+    error -- the only symptom is that kinetic and internal energy stay
+    identically zero, which is easy to read as "nothing has happened yet"
+    rather than "nothing will ever happen".
+
+    That is not hypothetical. The standoff was 2% of the BLOCK DEPTH while the
+    indentation is nanometres, so it came out ~200x the entire travel, and a
+    six-hour run was spent closing a gap it could not close.
+
+    Measured here from the deck's own node coordinates, not from any number
+    the writer reported.
+    """
+    print("\n8. can the grain reach the workpiece?")
+    work = d.parts.get("WORK")
+    grains = d.parts.get("GRAINS")
+    if not (work and grains):
+        print("       (not a MICRO deck: skipped)")
+        return
+
+    top = max(z for _, _, z in work["nodes"].values())
+    low = min(z for _, _, z in grains["nodes"].values())
+    standoff = low - top
+
+    # The imposed depth, read back out of the boundary conditions.
+    depth = 0.0
+    for kwd, pars, data, _ in d.kw("boundary"):
+        if str(pars.get("type", "")).lower() == "velocity":
+            continue
+        for ln in data:
+            f = [x.strip() for x in ln.split(",")]
+            if len(f) >= 4 and f[1] == "3" and f[2] == "3" and f[3]:
+                depth = max(depth, abs(float(f[3])))
+
+    chk("the grain starts clear of the work, not interpenetrating",
+        standoff > 0,
+        "lowest grain node is %.4e mm %s the surface"
+        % (abs(standoff), "below" if standoff < 0 else "above"))
+    if depth > 0:
+        chk("the imposed depth is larger than the standoff", standoff < depth,
+            "standoff %.4e mm vs depth %.4e mm -- the ramp would finish with "
+            "the grain still %.1f nm clear, and the job would run to "
+            "completion having touched nothing"
+            % (standoff, depth, (standoff - depth) * 1e6))
+        chk("and the standoff is a small fraction of it",
+            0 < standoff < 0.5 * depth,
+            "standoff/depth = %.3f" % (standoff / depth if depth else 0))
+
+
 def check_rigid_mass(d: Deck) -> None:
     """A rigid body needs mass, or every free translation must be constrained.
 
@@ -506,7 +567,7 @@ def check_rigid_mass(d: Deck) -> None:
     the material card -- because none of them asked whether the model could
     move.
     """
-    print("\n8. can every rigid body actually move?")
+    print("\n9. can every rigid body actually move?")
     rb = d.kw("rigid body")
     if not rb:
         print("       (no rigid bodies in this deck)")
@@ -552,7 +613,7 @@ def check_rigid_mass(d: Deck) -> None:
 
 def check_sector(d: Deck, timing: dict) -> None:
     """The sector's own curvature must span the indent."""
-    print("\n9. can the modelled sector actually make contact?")
+    print("\n10. can the modelled sector actually make contact?")
     pu = d.parts.get("PU")
     if not pu or not timing:
         print("       (not a MACRO deck, or no plan supplied: skipped)")
@@ -572,7 +633,7 @@ def check_sector(d: Deck, timing: dict) -> None:
 
 
 def check_seating(d: Deck, timing: dict) -> None:
-    print("\n10. is the tool seated at first contact?")
+    print("\n11. is the tool seated at first contact?")
     ins = {b[1].get("name"): b for b in d.kw("instance")}
     pu = d.parts.get("PU")
     work = d.parts.get("WORK")
@@ -610,7 +671,7 @@ def converge(refinements=(3.0, 5.0, 8.0, 12.0)) -> None:
     """
     from semgrit import materials, sagdeck
 
-    print("\n11. mesh convergence of the energy criterion")
+    print("\n12. mesh convergence of the energy criterion")
     w = materials.get("wc_co")
     hp = w.hybrid_params()
     dc = hp.critical_depth_mm()
@@ -663,6 +724,7 @@ def verify(path: str, timing: dict = None) -> None:
     check_material(d)
     check_geometry(d, macro)
     check_steps(d, macro, timing or {})
+    check_reachable(d)
     check_rigid_mass(d)
     if macro:
         check_sector(d, timing or {})
