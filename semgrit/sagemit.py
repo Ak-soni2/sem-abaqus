@@ -484,6 +484,10 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         raise SAGWriteError("mesh volume %.6g != block %.6g" % (vol, want))
 
     n_gr = max(int(mic["grains"]), 1)
+    # Diamond, as a sphere of the nominal grain size. Only used for the *Mass
+    # card; the dynamics are displacement-controlled.
+    grain_mass_t = (3520.0 * 1e-12 * (math.pi / 6.0)
+                    * (p.grain_um * 1e-3) ** 3 * n_gr)
     gv, gf, gtags = _grain_parts(
         solids, pl, n_grains=n_gr, radius_mm=0.0, sector_deg=0.0,
         width_mm=0.0, protrusion_frac=1.0, seed=seed)
@@ -541,6 +545,13 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     a("*Nset, nset=NS_GRAIN_REF, instance=GRAINS-1")
     a(" 1,")
     a("*Rigid Body, ref node=NS_GRAIN_REF, elset=GRAINS-1.ES_GRAINS")
+    a("** R3D3 facets carry no volume, so the rigid body would otherwise have")
+    a("** zero mass and Abaqus refuses that unless every translational dof is")
+    a("** constrained. All six ARE constrained here, so this does not drive")
+    a("** the solution -- but the real diamond mass costs nothing and removes")
+    a("** the dependence on that argument holding in every future step.")
+    a("*Mass, elset=GRAINS-1.ES_GRAINS")
+    a(" %s," % _fmt(grain_mass_t))
     a("*End Assembly")
     a("**")
     a("*Section Controls, name=EC1, DISTORTION CONTROL=YES,"
@@ -566,6 +577,11 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     # the energy criterion triggers on history, so a grain that only indents
     # and stops can never reach the threshold no matter how hard it presses.
     fn = c.load_per_grain_n
+    indent_mm = c.indentation_nm * 1e-6
+    if indent_mm <= 0:
+        raise SAGWriteError(
+            "the contact model predicts a non-positive indentation (%g nm), "
+            "so there is no depth to impose" % c.indentation_nm)
     v_slide = c.surface_speed_mm_s
     slide_time = side / v_slide if v_slide > 0 else p.grind_time_s
     # Passes needed to reach H*dc from this grain's own tangential work per
@@ -578,19 +594,44 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         n_passes = max(int(math.ceil(need * 1.5)), 2)
     n_passes = min(n_passes, 60)
     L += ["** " + "-" * 70,
-          "** STEP 1 of 2 -- press the grain on with its own share of the",
-          "** contact load, %.4e N. A FORCE, not a prescribed depth: the" % fn,
-          "** indentation is what this deck exists to predict, so imposing it",
-          "** would assume the answer.",
+          "** STEP 1 of 2 -- press the grain in to the depth the contact",
+          "** model predicts: %.4f nm." % (c.indentation_nm),
+          "**",
+          "** DISPLACEMENT-controlled, not force-controlled, and the reason",
+          "** matters. A rigid grain has no mass of its own -- R3D3 facets",
+          "** carry no volume -- so a free translational dof driven by a",
+          "** *Cload has no m to divide the force by. Abaqus rejects that",
+          "** outright:",
+          "**   ERROR: Abaqus/Explicit requires rigid bodies to have a",
+          "**   non-zero mass unless translational constraints are applied.",
+          "** Giving it the real diamond mass does not rescue force control",
+          "** either: %.3e N on a %.3e tonne grain is 4e10 mm/s2, which"
+          % (fn * n_gr, 3.52e-9 * (math.pi / 6.0) * (p.grain_um * 1e-3) ** 3),
+          "** carries it two hundred block-depths deep before contact can",
+          "** resist. A 6 um grit is far too light to be pushed by a force at",
+          "** this timescale.",
+          "**",
+          "** The experiment does not push the grain with a free force either.",
+          "** The compliant pad POSITIONS it: the backing deflects, and the",
+          "** grain sits at a depth while the layer carries the load. That",
+          "** depth is not unknown here -- semgrit.sag predicts it from the",
+          "** Hertzian chain, and that chain is validated against the paper's",
+          "** own measured spot area, per-grain force and chip thickness. So",
+          "** it is an INPUT to this deck, and the thing still being PREDICTED",
+          "** is the branch: ductile or brittle, from accumulated plastic work.",
+          "**",
+          "** RF3 at NS_GRAIN_REF is then a CHECK, not an input: it should come",
+          "** back near %.4e N. If it does not, the contact chain and the FE" % (fn * n_gr),
+          "** contact disagree, and that is worth knowing.",
           "*Step, name=LOAD, nlgeom=YES",
           "*Dynamic, Explicit", ", %s" % _fmt(slide_time * 0.2),
           "*Bulk Viscosity", " 0.06, 1.2",
-          "*Boundary, op=NEW",
-          " NS_GRAIN_REF, 1, 1", " NS_GRAIN_REF, 2, 2",
-          " NS_GRAIN_REF, 4, 6",
-          "*Cload, amplitude=RAMP",
-          " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
-          "*Amplitude, name=RAMP", " 0., 0., 1., 1.",
+          "*Boundary, op=NEW, amplitude=RAMP",
+          " NS_GRAIN_REF, 1, 1, 0.", " NS_GRAIN_REF, 2, 2, 0.",
+          " NS_GRAIN_REF, 3, 3, %s" % _fmt(-indent_mm),
+          " NS_GRAIN_REF, 4, 6, 0.",
+          "*Amplitude, name=RAMP, definition=SMOOTH STEP",
+          " 0., 0., %s, 1." % _fmt(slide_time * 0.2),
           "*Restart, write, number interval=1, time marks=NO",
           "*Output, field, number interval=20",
           "*Node Output", " U, V, A, RF",
@@ -633,11 +674,15 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         L += ["*Step, name=PASS%d, nlgeom=YES" % ip,
               "*Dynamic, Explicit", ", %s" % _fmt(slide_time),
               "*Bulk Viscosity", " 0.06, 1.2",
+              # Depth is HELD by a zero velocity on dof 3, not re-imposed as a
+              # displacement: the LOAD step already put the grain there, and a
+              # displacement BC in a later step is measured from the ORIGINAL
+              # position, which would retract it.
               "*Boundary, op=NEW, type=VELOCITY",
               " NS_GRAIN_REF, 1, 1, %s" % _fmt(v_slide if ip % 2 else -v_slide),
-              " NS_GRAIN_REF, 2, 2, 0.", " NS_GRAIN_REF, 4, 6, 0.",
-              "*Cload, op=NEW",
-              " NS_GRAIN_REF, 3, %s" % _fmt(-fn * n_gr),
+              " NS_GRAIN_REF, 2, 2, 0.",
+              " NS_GRAIN_REF, 3, 3, 0.",
+              " NS_GRAIN_REF, 4, 6, 0.",
               "*Restart, write, number interval=1, time marks=NO",
               "*Output, field, number interval=20",
               "*Node Output", " U, V, A, RF",
@@ -662,6 +707,8 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         dc_measured=w.dc_measured, psi=psi, swmode=1,
         load_per_grain_n=fn, total_load_n=fn * n_gr,
         slide_speed_mm_s=v_slide, slide_time_s=slide_time,
+        indentation_mm=indent_mm, indentation_nm=c.indentation_nm,
+        grain_mass_tonne=grain_mass_t, driven="displacement",
         n_passes=n_passes, total_time_s=slide_time * (n_passes + 0.2),
         energy_threshold_mpa_mm=hp.hardness_mpa * hp.critical_depth_mm(),
         elements_per_dc=p.elements_per_dc, resolves_dc=True,
@@ -725,7 +772,24 @@ def demo(outdir: str = "_sagemit_demo") -> None:
     assert "name=LOAD" in mtxt
     for i in range(1, mi["n_passes"] + 1):
         assert "name=PASS%d" % i in mtxt, i
-    assert "*Cload" in mtxt, "the grain is driven by force, not displacement"
+    # Displacement-controlled. The *Cload assertion that used to be here was
+    # not merely stale -- it kept PASSING after the change, because the word
+    # survives in a comment explaining why force control was abandoned. So
+    # this checks the keyword at the start of a line, and checks the depth
+    # imposed is the one the contact model predicted.
+    assert not any(ln.startswith("*Cload") for ln in mtxt.splitlines()), \
+        "a rigid grain has no mass, so a force-driven free dof is rejected"
+    assert "*Mass" in mtxt, "the rigid body must carry a mass"
+    depth = " NS_GRAIN_REF, 3, 3, %s" % _fmt(-mi["indentation_mm"])
+    assert depth in mtxt, depth
+    assert mi["driven"] == "displacement"
+    assert mi["indentation_nm"] > 0
+    assert mi["grain_mass_tonne"] > 0
+    # and every later step must HOLD that depth with a zero velocity rather
+    # than re-imposing a displacement, which would be measured from the
+    # original position and retract the grain
+    holds = mtxt.count(" NS_GRAIN_REF, 3, 3, 0.")
+    assert holds == mi["n_passes"], (holds, mi["n_passes"])
     assert "type=VELOCITY" in mtxt, "the slide must be a velocity"
     assert "PLOT SDV13" in mtxt
     # The passes must ALTERNATE direction, so the grain returns over the same

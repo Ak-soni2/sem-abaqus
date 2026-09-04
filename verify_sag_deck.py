@@ -31,6 +31,12 @@ The material card. 58 constants (not 56), SWMODE = 1, and the energy threshold
 ``H*dc``. Since dc for WC-Co is MEASURED, this is where a deck that quietly fell
 back on Bifano's 17x-too-large value would be caught.
 
+RIGID BODIES THAT CANNOT MOVE. A rigid part made of R3D3 facets has no
+volume and therefore no mass, so a free translational dof driven by a force
+makes a = F/m undefined and Abaqus refuses at the packager. This deck shipped
+with exactly that and passed every other gate, because none of them asked
+whether the model could move.
+
 MESH CONVERGENCE. The energy criterion is regularised by the element length, so
 it is mesh-dependent BY CONSTRUCTION: halving the element halves the work
 density needed to trigger. ``--converge`` builds the same physics at several
@@ -394,10 +400,38 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
             "%d pass velocities, %d reversals -- a one-way slide would leave "
             "every point with a single pass and could never accumulate to "
             "the threshold" % (len(vx), flips))
-        chk("the grain is driven by a force, not a prescribed depth",
-            bool(d.kw("cload")),
-            "the indentation is what the deck predicts, so imposing it "
-            "would assume the answer")
+        # Displacement-controlled, and NOT force-controlled -- the opposite
+        # of what this gate used to demand. A rigid grain has no mass, so a
+        # force on a free dof is rejected by Abaqus outright; and giving it
+        # the real diamond mass does not help, because 1.7e-5 N on 4e-16
+        # tonne is 4e10 mm/s2 and the grain would cross the block two hundred
+        # times over before contact could resist. The pad POSITIONS the grain
+        # in the experiment, and the depth is predicted by the Hertz chain
+        # rather than unknown, so it is an input here. The branch is still the
+        # output.
+        depths = []
+        for kwd, pars, data, _ in d.kw("boundary"):
+            if str(pars.get("type", "")).lower() == "velocity":
+                continue
+            for ln in data:
+                f = [x.strip() for x in ln.split(",")]
+                if len(f) >= 4 and f[1] == "3" and f[2] == "3" and f[3]:
+                    v = float(f[3])
+                    if v != 0.0:
+                        depths.append(abs(v))
+        chk("the grain is pressed to a prescribed depth", bool(depths),
+            "%s mm -- the contact chain predicts the indentation and is "
+            "validated against the paper's measurements, so it is an input; "
+            "the ductile/brittle branch is what is predicted"
+            % (["%.3e" % v for v in depths] or "none"))
+        if depths:
+            chk("that depth is a sane sub-nanometre indentation",
+                all(1e-9 < v < 1e-3 for v in depths),
+                "%s mm" % ["%.3e" % v for v in depths])
+        chk("no *Cload on the grain: a massless rigid body cannot take one",
+            not d.kw("cload"),
+            "Abaqus: rigid bodies require non-zero mass unless translational "
+            "constraints are applied")
         slide = 0.0
         for kwd, pars, data, _ in d.kw("boundary"):
             if str(pars.get("type", "")).lower() != "velocity":
@@ -455,9 +489,70 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
                 % (hold, hold / timing["prony_tau_s"]))
 
 
+def check_rigid_mass(d: Deck) -> None:
+    """A rigid body needs mass, or every free translation must be constrained.
+
+    Abaqus/Explicit integrates a = F/m on a rigid body's reference node. R3D3
+    facets carry no volume and therefore no mass, so a rigid part built from
+    them has m = 0 and any FREE translational dof makes that division
+    undefined. Abaqus refuses at the packager:
+
+        ERROR: Abaqus/Explicit requires rigid bodies to have a non-zero mass
+        unless translational constraints are applied with the *BOUNDARY
+        option.
+
+    This deck hit exactly that: the grain was rigid, massless, and driven on
+    dof 3 by a *Cload. It passed every other gate -- the grammar, the geometry,
+    the material card -- because none of them asked whether the model could
+    move.
+    """
+    print("\n8. can every rigid body actually move?")
+    rb = d.kw("rigid body")
+    if not rb:
+        print("       (no rigid bodies in this deck)")
+        return
+    has_mass = bool(d.kw("mass")) or bool(d.kw("inertia"))
+    # Which reference-node dofs are constrained, anywhere in the deck?
+    refs = set()
+    for _, pars, _, _ in rb:
+        r = pars.get("ref node")
+        if r:
+            refs.add(r.upper())
+    for ref in sorted(refs):
+        fixed = set()
+        for kwd, pars, data, _ in d.blocks:
+            if kwd != "boundary":
+                continue
+            for ln in data:
+                f = [x.strip() for x in ln.split(",")]
+                if not f or f[0].upper().split(".")[-1] != ref:
+                    continue
+                if len(f) >= 2 and f[1].upper() in ("ENCASTRE", "PINNED"):
+                    fixed |= {1, 2, 3}
+                elif len(f) >= 3 and f[1].isdigit() and f[2].isdigit():
+                    fixed |= set(range(int(f[1]), int(f[2]) + 1))
+                elif len(f) >= 2 and f[1].isdigit():
+                    fixed.add(int(f[1]))
+        free = {1, 2, 3} - fixed
+        chk("%s: every translation is constrained, or the body has mass"
+            % ref, (not free) or has_mass,
+            "dof %s free and no *Mass -- Abaqus integrates a = F/m on the "
+            "reference node, and R3D3 facets carry no volume so m = 0"
+            % sorted(free))
+
+    # A force on a massless free dof is the specific failure.
+    for kwd, pars, data, _ in d.kw("cload"):
+        for ln in data:
+            f = [x.strip() for x in ln.split(",")]
+            if len(f) >= 2 and f[0].upper().split(".")[-1] in refs:
+                chk("a *Cload on a rigid reference node needs mass", has_mass,
+                    "%s dof %s is force-driven on a body with no *Mass"
+                    % (f[0], f[1]))
+
+
 def check_sector(d: Deck, timing: dict) -> None:
     """The sector's own curvature must span the indent."""
-    print("\n6. can the modelled sector actually make contact?")
+    print("\n9. can the modelled sector actually make contact?")
     pu = d.parts.get("PU")
     if not pu or not timing:
         print("       (not a MACRO deck, or no plan supplied: skipped)")
@@ -477,7 +572,7 @@ def check_sector(d: Deck, timing: dict) -> None:
 
 
 def check_seating(d: Deck, timing: dict) -> None:
-    print("\n7. is the tool seated at first contact?")
+    print("\n10. is the tool seated at first contact?")
     ins = {b[1].get("name"): b for b in d.kw("instance")}
     pu = d.parts.get("PU")
     work = d.parts.get("WORK")
@@ -515,7 +610,7 @@ def converge(refinements=(3.0, 5.0, 8.0, 12.0)) -> None:
     """
     from semgrit import materials, sagdeck
 
-    print("\n8. mesh convergence of the energy criterion")
+    print("\n11. mesh convergence of the energy criterion")
     w = materials.get("wc_co")
     hp = w.hybrid_params()
     dc = hp.critical_depth_mm()
@@ -568,6 +663,7 @@ def verify(path: str, timing: dict = None) -> None:
     check_material(d)
     check_geometry(d, macro)
     check_steps(d, macro, timing or {})
+    check_rigid_mass(d)
     if macro:
         check_sector(d, timing or {})
         check_seating(d, timing or {})
