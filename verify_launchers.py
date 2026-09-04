@@ -36,6 +36,12 @@ WHAT IS CHECKED
 * A datacheck runs before the solve, and the script stops if it fails --
   `errorlevel` on Windows, `||` or `set -e` on POSIX.
 * run.bat is CRLF. A LF-only .bat misparses on some Windows setups.
+* Every ``abaqus`` line in a run.bat is ``call``ed. On Windows ``abaqus`` is
+  ``abaqus.bat``, and running one batch file from another WITHOUT ``call``
+  transfers control permanently -- the caller never resumes. This bit the
+  project immediately after the flag fix above: the verify ran, printed
+  ``result : PASS``, and the script simply ended, having submitted nothing
+  and printed no error. 57 lines across all 18 .bat files.
 """
 
 from __future__ import annotations
@@ -145,6 +151,15 @@ def check(path):
             chk("%s: it stops if the datacheck fails" % rel, bool(guards),
                 "otherwise the solve starts anyway and the datacheck was "
                 "decoration")
+
+    # --- `call` on every abaqus line, in .bat only ----------------------
+    if bat:
+        uncalled = re.findall(r"(?m)^\s*(abaqus\s+\S+)", s)
+        chk("%s: every abaqus line is `call`ed" % rel, not uncalled,
+            "%s -- on Windows abaqus is abaqus.bat, and one .bat running "
+            "another without `call` never returns, so everything after the "
+            "first abaqus line silently never runs"
+            % (uncalled[:2] if uncalled else ""))
 
     # --- line endings ----------------------------------------------------
     if bat:

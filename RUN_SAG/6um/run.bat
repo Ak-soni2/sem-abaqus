@@ -21,14 +21,19 @@ rem
 rem  The subroutine is vumat_grind2.for, NOT vumat_grind.for: this deck
 rem  carries 58 constants and the local energy criterion. vumat_grind.for
 rem  reads 56 and would misinterpret the card.
-abaqus verify -user_exp
+rem  Every abaqus line is `call`ed. On Windows `abaqus` is abaqus.bat,
+rem  and running one batch file from another WITHOUT `call` transfers
+rem  control permanently -- the caller never resumes. Without it this
+rem  script ran the verify and then silently stopped, submitting
+rem  nothing, with no error to say so.
+call abaqus verify -user_exp
 if errorlevel 1 (
   echo.
   echo  Abaqus cannot build a user subroutine on this machine.
   echo  Check that the Fortran compiler is on PATH and linked to Abaqus.
   exit /b 1
 )
-abaqus job=micro_6um input=micro_6um.inp user=vumat_grind2.for double=both cpus=1 datacheck
+call abaqus job=micro_6um input=micro_6um.inp user=vumat_grind2.for double=both cpus=1 datacheck
 if errorlevel 1 (
   echo.
   echo  DATACHECK FAILED -- read micro_6um.dat, the error is a keyword or the
@@ -38,6 +43,6 @@ if errorlevel 1 (
 echo.
 echo  datacheck passed. Starting the solve -- about 392 h on 8 cores.
 echo.
-abaqus job=micro_6um input=micro_6um.inp user=vumat_grind2.for double=both cpus=8 interactive
+call abaqus job=micro_6um input=micro_6um.inp user=vumat_grind2.for double=both cpus=8 interactive
 if errorlevel 1 exit /b 1
-abaqus python postprocess_odb.py
+call abaqus python postprocess_odb.py

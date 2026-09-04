@@ -222,6 +222,11 @@ def command_file(folder, job, deck, subroutine, cores=8):
     ]
     # cd to the script's own folder: Abaqus resolves input= and user= against the
     # working directory, so RUN_ME\1_single_abrasive\run.bat invoked from the repo
+    # Every abaqus line in run.bat is `call`ed. On Windows `abaqus` is
+    # abaqus.bat, and running one batch file from another WITHOUT `call`
+    # transfers control permanently -- the caller never resumes. Without it
+    # this script ran the verify and then silently stopped, having submitted
+    # nothing and printed no error. run.sh needs no such thing.
     # root would otherwise look for the deck and the .for in the root and abort.
     # And stop on a failed datacheck -- without the guard a deck that died at
     # preprocessing still fires the solve line and burns the licence tokens.
@@ -230,10 +235,10 @@ def command_file(folder, job, deck, subroutine, cores=8):
         fh.write("cd /d \"%~dp0\"\r\n")
         for ln in rem:
             fh.write(("rem  " + ln).rstrip() + "\r\n")
-        fh.write("abaqus verify -user_exp\r\n")
-        fh.write(base + " cpus=1 datacheck\r\n")
+        fh.write("call abaqus verify -user_exp\r\n")
+        fh.write("call " + base + " cpus=1 datacheck\r\n")
         fh.write("if errorlevel 1 exit /b 1\r\n")
-        fh.write(line + "\r\n")
+        fh.write("call " + line + "\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
         fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
         for ln in rem:

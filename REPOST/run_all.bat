@@ -54,7 +54,7 @@ call :job ENERGY_abrasive1_sic
 
 echo.
 echo ############ comparison ############
-abaqus python "%HS%" --table
+call abaqus python "%HS%" --table
 echo.
 echo Done. Send back: the console text above, plus *_summary.json,
 echo *_hotspot.json and *_sdv.csv.
@@ -67,6 +67,6 @@ if not exist "%~1.odb" (
 )
 echo.
 echo --- %~1 ---
-abaqus python "%PP%" "%~1.odb" "%R%\%~1_report.json"
-abaqus python "%HS%" "%~1.odb"
+call abaqus python "%PP%" "%~1.odb" "%R%\%~1_report.json"
+call abaqus python "%HS%" "%~1.odb"
 goto :eof

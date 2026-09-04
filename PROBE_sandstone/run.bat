@@ -1,9 +1,9 @@
 @echo off
 cd /d "%~dp0"
 rem Step 0: does the Fortran toolchain work at all?
-abaqus verify -user_exp
+call abaqus verify -user_exp
 rem Step 1: preprocessing only. Seconds. Reads the card.
-abaqus job=probe input=probe.inp user=vumat_grind.for double=both cpus=1 datacheck
+call abaqus job=probe input=probe.inp user=vumat_grind.for double=both cpus=1 datacheck
 if errorlevel 1 exit /b 1
 rem Step 2: solve it.
-abaqus job=probe input=probe.inp user=vumat_grind.for double=both cpus=1 interactive
+call abaqus job=probe input=probe.inp user=vumat_grind.for double=both cpus=1 interactive

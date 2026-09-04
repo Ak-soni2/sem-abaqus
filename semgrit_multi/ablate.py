@@ -175,10 +175,14 @@ def write_arms(deck_in: str, outdir: str, *,
         check = base + " cpus=1 datacheck"
         with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
             fh.write("@echo off\r\ncd /d \"%~dp0\"\r\n")
-            fh.write("abaqus verify -user_exp\r\n")
-            fh.write(check + "\r\n")
+            # `call`, because on Windows abaqus is abaqus.bat and
+            # running one batch file from another without it transfers
+            # control permanently -- the caller never resumes, so the
+            # solve never runs and nothing says so.
+            fh.write("call abaqus verify -user_exp\r\n")
+            fh.write("call " + check + "\r\n")
             fh.write("if errorlevel 1 exit /b 1\r\n")
-            fh.write(line + "\r\n")
+            fh.write("call " + line + "\r\n")
         with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
             fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
             fh.write("abaqus verify -user_exp\n")
