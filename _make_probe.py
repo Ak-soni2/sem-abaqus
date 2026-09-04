@@ -231,7 +231,7 @@ def write_probe(folder: str, props, depvar, delete_sdv, dc_mm, material,
         fh.write("@echo off\r\n")
         fh.write("cd /d \"%~dp0\"\r\n")
         fh.write("rem Step 0: does the Fortran toolchain work at all?\r\n")
-        fh.write("abaqus verify -user_explicit\r\n")
+        fh.write("abaqus verify -user_exp\r\n")
         fh.write("rem Step 1: preprocessing only. Seconds. Reads the card.\r\n")
         fh.write(line + " datacheck\r\n")
         fh.write("if errorlevel 1 exit /b 1\r\n")
@@ -239,7 +239,7 @@ def write_probe(folder: str, props, depvar, delete_sdv, dc_mm, material,
         fh.write(line + " interactive\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
         fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
-        fh.write("abaqus verify -user_explicit\n")
+        fh.write("abaqus verify -user_exp\n")
         fh.write(line + " datacheck\n" + line + " interactive\n")
 
     exp = ["# What to accept", "",

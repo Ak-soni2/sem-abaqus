@@ -202,7 +202,7 @@ def command_file(folder, job, deck, subroutine, cores=8):
     rem = [
         "Submit this deck. THREE steps, in order.",
         "",
-        "  0. abaqus verify -user_explicit",
+        "  0. abaqus verify -user_exp",
         "     Does the Fortran toolchain work at all? Every gate in this",
         "     project compiled with gfortran, so this is the ONLY check that",
         "     Abaqus can build a user subroutine on this machine.",
@@ -230,7 +230,7 @@ def command_file(folder, job, deck, subroutine, cores=8):
         fh.write("cd /d \"%~dp0\"\r\n")
         for ln in rem:
             fh.write(("rem  " + ln).rstrip() + "\r\n")
-        fh.write("abaqus verify -user_explicit\r\n")
+        fh.write("abaqus verify -user_exp\r\n")
         fh.write(base + " cpus=1 datacheck\r\n")
         fh.write("if errorlevel 1 exit /b 1\r\n")
         fh.write(line + "\r\n")
@@ -238,7 +238,7 @@ def command_file(folder, job, deck, subroutine, cores=8):
         fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
         for ln in rem:
             fh.write(("#  " + ln).rstrip() + "\n")
-        fh.write("abaqus verify -user_explicit\n")
+        fh.write("abaqus verify -user_exp\n")
         fh.write(base + " cpus=1 datacheck\n")
         fh.write(line + "\n")
     return line

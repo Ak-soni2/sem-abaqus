@@ -175,13 +175,13 @@ def write_arms(deck_in: str, outdir: str, *,
         check = base + " cpus=1 datacheck"
         with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
             fh.write("@echo off\r\ncd /d \"%~dp0\"\r\n")
-            fh.write("abaqus verify -user_explicit\r\n")
+            fh.write("abaqus verify -user_exp\r\n")
             fh.write(check + "\r\n")
             fh.write("if errorlevel 1 exit /b 1\r\n")
             fh.write(line + "\r\n")
         with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
             fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
-            fh.write("abaqus verify -user_explicit\n")
+            fh.write("abaqus verify -user_exp\n")
             fh.write(check + "\n")
             fh.write(line + "\n")
         # The arms are the comparison the whole model rests on, and until now they

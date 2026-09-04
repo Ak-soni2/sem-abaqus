@@ -2,7 +2,7 @@
 # 30 um pad -- SAG on HVOF WC-Co, after Ghosh et al. 2021.
 # See run.bat for why each stage is here. double=both is required.
 cd "$(dirname "$0")" || exit 1
-abaqus verify -user_explicit || {
+abaqus verify -user_exp || {
   echo "Abaqus cannot build a user subroutine on this machine." >&2
   exit 1
 }

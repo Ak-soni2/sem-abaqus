@@ -7,7 +7,7 @@ Self-contained. Copy the whole folder to your work directory and run
 run.bat
 ```
 
-That runs three stages: `abaqus verify -user_explicit` (can this machine build
+That runs three stages: `abaqus verify -user_exp` (can this machine build
 a subroutine at all), a **datacheck** (seconds — catches keyword and material
 card errors before the queue), then the solve, then the postprocessor.
 
@@ -32,7 +32,7 @@ flips is the physics.
 
 ## Requirements
 
-- Abaqus with a working Fortran toolchain (`abaqus verify -user_explicit`)
+- Abaqus with a working Fortran toolchain (`abaqus verify -user_exp`)
 - `double=both` — non-negotiable, and the failure is silent if omitted
 - `vumat_grind2.for` (58 constants, energy criterion) — **already in this
   folder**, not `vumat_grind.for`

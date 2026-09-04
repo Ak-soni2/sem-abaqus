@@ -40,6 +40,10 @@ python -m semgrit analyze "*.tif" -o results --step --step-max-grains 200
 # full verification suite (unit + integration + export round-trips)
 python verify_all.py
 
+# every run.bat / run.sh: real Abaqus flags, double=both, a datacheck that
+# actually stops on failure, the subroutine present in the folder
+python verify_launchers.py
+
 # the constitutive law: compiles vumat_grind.for and exercises it on a single
 # material point against closed-form algebra, the published JH-2 benchmarks,
 # and vumat_jh2.for itself (needs gfortran)

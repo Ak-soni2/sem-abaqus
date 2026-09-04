@@ -39,7 +39,7 @@ rem  {pad} um pad -- SAG on HVOF WC-Co, after Ghosh et al. 2021.
 rem
 rem  Three stages, in order, and the first two are cheap:
 rem
-rem    0. abaqus verify -user_explicit
+rem    0. abaqus verify -user_exp
 rem       Can Abaqus build a user subroutine on THIS machine at all? If the
 rem       Fortran toolchain is not wired up, everything after fails with a
 rem       message that does not say so.
@@ -56,7 +56,7 @@ rem
 rem  The subroutine is vumat_grind2.for, NOT vumat_grind.for: this deck
 rem  carries 58 constants and the local energy criterion. vumat_grind.for
 rem  reads 56 and would misinterpret the card.
-abaqus verify -user_explicit
+abaqus verify -user_exp
 if errorlevel 1 (
   echo.
   echo  Abaqus cannot build a user subroutine on this machine.
@@ -82,7 +82,7 @@ RUN_SH = r"""#!/bin/sh
 # {pad} um pad -- SAG on HVOF WC-Co, after Ghosh et al. 2021.
 # See run.bat for why each stage is here. double=both is required.
 cd "$(dirname "$0")" || exit 1
-abaqus verify -user_explicit || {{
+abaqus verify -user_exp || {{
   echo "Abaqus cannot build a user subroutine on this machine." >&2
   exit 1
 }}
@@ -289,7 +289,7 @@ Self-contained. Copy the whole folder to your work directory and run
 run.bat
 ```
 
-That runs three stages: `abaqus verify -user_explicit` (can this machine build
+That runs three stages: `abaqus verify -user_exp` (can this machine build
 a subroutine at all), a **datacheck** (seconds — catches keyword and material
 card errors before the queue), then the solve, then the postprocessor.
 
@@ -314,7 +314,7 @@ flips is the physics.
 
 ## Requirements
 
-- Abaqus with a working Fortran toolchain (`abaqus verify -user_explicit`)
+- Abaqus with a working Fortran toolchain (`abaqus verify -user_exp`)
 - `double=both` — non-negotiable, and the failure is silent if omitted
 - `vumat_grind2.for` (58 constants, energy criterion) — **already in this
   folder**, not `vumat_grind.for`

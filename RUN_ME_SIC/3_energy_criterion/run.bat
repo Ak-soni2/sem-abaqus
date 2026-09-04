@@ -2,7 +2,7 @@
 cd /d "%~dp0"
 rem  Submit this deck. THREE steps, in order.
 rem
-rem    0. abaqus verify -user_explicit
+rem    0. abaqus verify -user_exp
 rem       Does the Fortran toolchain work at all? Every gate in this
 rem       project compiled with gfortran, so this is the ONLY check that
 rem       Abaqus can build a user subroutine on this machine.
@@ -17,7 +17,7 @@ rem  and single precision does not have the digits.
 rem
 rem  LICENCE: cpus=8 needs int(5*8^0.422) = 12 Abaqus tokens, against 5
 rem  at cpus=1. Every wall clock in the README is the 8-core figure.
-abaqus verify -user_explicit
+abaqus verify -user_exp
 abaqus job=energy_criterion input=energy_criterion.inp user=vumat_grind2.for double=both cpus=1 datacheck
 if errorlevel 1 exit /b 1
 abaqus job=energy_criterion input=energy_criterion.inp user=vumat_grind2.for double=both cpus=8 interactive

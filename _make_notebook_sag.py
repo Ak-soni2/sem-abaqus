@@ -696,10 +696,23 @@ CELLS.append(md(r"""
 ## 12 · Running the deck, and reading the result
 
 ```
+abaqus verify -user_exp
+abaqus job=micro input=micro.inp user=vumat_grind2.for double=both cpus=1 datacheck
 abaqus job=micro input=micro.inp user=vumat_grind2.for double=both cpus=8 interactive
 ```
 
-Three things about that command line are not optional.
+Or just copy a folder from `RUN_SAG/` and run its `run.bat` / `run.sh`, which
+does all three in order and stops on the first failure.
+
+**`-user_exp`, not `-user_explicit`.** The second is not an Abaqus option and
+never was; it aborts the launcher before anything is submitted. A VUMAT is an
+*Explicit* user subroutine, so the flag is `user_exp` — `user_std` is the
+Standard equivalent, and plain `exp` verifies the *solver* rather than the
+Fortran toolchain, which is the thing that actually fails on a fresh machine.
+`verify_launchers.py` now checks every `run.bat` and `run.sh` in the project
+against the option list Abaqus itself prints.
+
+Three more things about that command line are not optional.
 
 **`double=both`.** $h$ and $d_c$ are compared at 80 nm against a millimetre
 geometry — a ratio of $10^{-6}$. Single precision has ~7 decimal digits and

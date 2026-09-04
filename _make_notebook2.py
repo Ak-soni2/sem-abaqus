@@ -875,7 +875,7 @@ CELLS.append(md(r"""
 ## Running it, and reading it
 
 ```
-abaqus verify -user_explicit
+abaqus verify -user_exp
 abaqus job=grind input=multi_abrasive_field.inp user=vumat_grind.for double=both cpus=8 interactive
 ```
 

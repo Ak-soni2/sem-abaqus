@@ -1895,7 +1895,7 @@ With `RUN_READY` on there is nothing to do in CAE. Put the `.inp` and your VUMAT
 same folder and submit:
 
 ```
-abaqus verify -user_explicit
+abaqus verify -user_exp
 abaqus job=grind input=<name>.inp user=vumat_jh2.for double=both cpus=8 interactive
 ```
 
@@ -2395,7 +2395,7 @@ CELLS.append(md(r"""
 ## B4 - Running the single-abrasive deck, and reading it
 
 ```
-abaqus verify -user_explicit
+abaqus verify -user_exp
 abaqus job=grind input=single_abrasive_hybrid.inp user=vumat_grind.for double=both cpus=8 interactive
 ```
 

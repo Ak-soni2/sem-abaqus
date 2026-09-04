@@ -4,7 +4,7 @@ rem  15 um pad -- SAG on HVOF WC-Co, after Ghosh et al. 2021.
 rem
 rem  Three stages, in order, and the first two are cheap:
 rem
-rem    0. abaqus verify -user_explicit
+rem    0. abaqus verify -user_exp
 rem       Can Abaqus build a user subroutine on THIS machine at all? If the
 rem       Fortran toolchain is not wired up, everything after fails with a
 rem       message that does not say so.
@@ -21,7 +21,7 @@ rem
 rem  The subroutine is vumat_grind2.for, NOT vumat_grind.for: this deck
 rem  carries 58 constants and the local energy criterion. vumat_grind.for
 rem  reads 56 and would misinterpret the card.
-abaqus verify -user_explicit
+abaqus verify -user_exp
 if errorlevel 1 (
   echo.
   echo  Abaqus cannot build a user subroutine on this machine.
