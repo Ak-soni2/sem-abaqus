@@ -227,3 +227,6 @@ _sagfig_demo/
 _sag_meas/
 _sagnb_*/
 RUN_SAG/_meas/
+# SAG_V2 decks: 12-61 MB each, rebuilt by `python _make_sag_v2.py`.
+SAG_V2/**/*.inp
+SAG_V2/_meas/

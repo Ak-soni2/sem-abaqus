@@ -1,0 +1,41 @@
+{
+ "tag": "sagv2",
+ "decks": [
+  {
+   "pad": 6.0,
+   "job": "sagv2_6um",
+   "path": "SAG_V2\\6um\\sagv2_6um.inp",
+   "chip_nm": 80.0,
+   "chip_over_dc": 1.0,
+   "elements": 483181,
+   "passes": 24,
+   "mb": 61.02,
+   "model_mass_tonne": 1.6969531192491475e-14,
+   "hours_8core": 392
+  },
+  {
+   "pad": 15.0,
+   "job": "sagv2_15um",
+   "path": "SAG_V2\\15um\\sagv2_15um.inp",
+   "chip_nm": 195.0,
+   "chip_over_dc": 2.4375,
+   "elements": 191296,
+   "passes": 16,
+   "mb": 23.38,
+   "model_mass_tonne": 4.649813123188557e-14,
+   "hours_8core": 162
+  },
+  {
+   "pad": 30.0,
+   "job": "sagv2_30um",
+   "path": "SAG_V2\\30um\\sagv2_30um.inp",
+   "chip_nm": 295.0,
+   "chip_over_dc": 3.6875,
+   "elements": 107604,
+   "passes": 11,
+   "mb": 12.78,
+   "model_mass_tonne": 1.425628276328623e-13,
+   "hours_8core": 96
+  }
+ ]
+}
