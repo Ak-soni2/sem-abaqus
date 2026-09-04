@@ -498,13 +498,36 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     if abs(vol - want) / want > 1e-6:
         raise SAGWriteError("mesh volume %.6g != block %.6g" % (vol, want))
 
-    # Needed before the grains are seated: the standoff is a fraction of
-    # this, so it has to exist first.
-    indent_mm = c.indentation_nm * 1e-6
-    if indent_mm <= 0:
+    # THE CUT DEPTH IS THE MEASURED CHIP THICKNESS.
+    #
+    # Not the Brinell indentation. That distinction is the whole reason this
+    # deck works at all, so it is worth being explicit.
+    #
+    # sag.py's eqs. 11-12 give the depth a STATIC spherical indenter reaches
+    # under the per-grain load: 0.18 nm for the 30 um pad. That number is
+    # self-consistent -- a 0.18 nm cap on a 30 um sphere is 146 nm wide, which
+    # is what groove_width_nm reports -- but it is not the depth of material
+    # a MOVING grain removes, and it is not what the paper's dc refers to.
+    #
+    # The paper measures chips directly (section 4.2, Fig. 17) and calls the
+    # transition threshold a "critical chip thickness ... critical depth of
+    # indentation": 240-350 nm for the 30 um pad, 160-230 for 15 um, 60-100
+    # for 6 um, against dc = 60-100 nm. Its entire argument is that the first
+    # two exceed dc and fracture while the third sits at dc and does not. So
+    # the chip thickness IS the depth the criterion is tested against.
+    #
+    # Two things go wrong if the Brinell indentation is used instead. It is
+    # three orders below what the paper measured for the same pad, so it
+    # cannot reproduce the ordering. And at 0.18 nm it is 1/90th of one 16 nm
+    # element and smaller than a WC unit cell (~0.29 nm) -- there is no mesh,
+    # and no continuum, that represents it.
+    chip_nm = mic.get("chip_depth_nm") or 0.0
+    if chip_nm <= 0:
         raise SAGWriteError(
-            "the contact model predicts a non-positive indentation "
-            "(%g nm), so there is no depth to impose" % c.indentation_nm)
+            "no measured chip thickness for the %g um pad, so there is no "
+            "cut depth to impose. sag.MEASURED_CHIP_NM carries the paper's "
+            "values for 6, 15 and 30 um." % p.grain_um)
+    indent_mm = chip_nm * 1e-6
     n_gr = max(int(mic["grains"]), 1)
     # Diamond, as a sphere of the nominal grain size. Only used for the *Mass
     # card; the dynamics are displacement-controlled.
@@ -615,8 +638,19 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         n_passes = max(int(math.ceil(need * 1.5)), 2)
     n_passes = min(n_passes, 60)
     L += ["** " + "-" * 70,
-          "** STEP 1 of 2 -- press the grain in to the depth the contact",
-          "** model predicts: %.4f nm." % (c.indentation_nm),
+          "** STEP 1 of 2 -- cut to the MEASURED chip thickness,",
+          "** %.1f nm for this pad." % chip_nm,
+          "**",
+          "** That is the paper's own measurement (section 4.2, Fig. 17),",
+          "** not the static Brinell indentation, which for this pad is",
+          "** %.3f nm -- three orders smaller, 1/%.0f of one element, and"
+          % (c.indentation_nm, mic["element_mm"] * 1e6 / max(c.indentation_nm, 1e-30)),
+          "** below a WC unit cell. The paper compares its measured chip",
+          "** thickness against dc and that comparison is its result, so",
+          "** the chip thickness is what this deck cuts.",
+          "**   chip %.1f nm / dc %.1f nm = %.2f"
+          % (chip_nm, hp.critical_depth_mm() * 1e6,
+             chip_nm / (hp.critical_depth_mm() * 1e6)),
           "**",
           "** DISPLACEMENT-controlled, not force-controlled, and the reason",
           "** matters. A rigid grain has no mass of its own -- R3D3 facets",
@@ -729,6 +763,9 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
         load_per_grain_n=fn, total_load_n=fn * n_gr,
         slide_speed_mm_s=v_slide, slide_time_s=slide_time,
         indentation_mm=indent_mm, indentation_nm=c.indentation_nm,
+        chip_depth_nm=chip_nm,
+        chip_over_dc=chip_nm / (hp.critical_depth_mm() * 1e6),
+        elements_through_chip=chip_nm / (mic["element_mm"] * 1e6),
         standoff_mm=STANDOFF_FRACTION * indent_mm,
         standoff_over_indent=STANDOFF_FRACTION,
         grain_mass_tonne=grain_mass_t, driven="displacement",

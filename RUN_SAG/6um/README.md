@@ -13,6 +13,23 @@ card errors before the queue), then the solve, then the postprocessor.
 
 **Estimated 392 h on 8 cores.**
 
+## What this deck cuts, and why
+
+The cut depth is the **measured chip thickness** for this pad, not the static
+Brinell indentation. The paper measures chips directly (section 4.2, Fig. 17)
+and compares them against `dc` — that comparison *is* its result:
+
+| pad | measured chip | chip / dc | paper observed |
+|---|---|---|---|
+| 6 µm | 60–100 nm | **1.00** | pure ductile |
+| 15 µm | 160–230 nm | **2.44** | brittle + plastic |
+| 30 µm | 240–350 nm | **3.69** | brittle + plastic |
+
+The Brinell indentation from eqs. 11–12 is a different quantity: 0.18 nm for
+the 30 µm pad, three orders below what the paper measured for the same pad. It
+is also unmodellable — 1/90th of one element and smaller than a WC unit cell —
+so a deck built on it runs for days with the energy history flat.
+
 ## Read EXPECTED.md first
 
 It records what this deck predicts, written before the run. The point of the

@@ -98,7 +98,7 @@
    "micro": {
     "path": "RUN_SAG\\15um\\micro_15um.inp",
     "elements": 191296,
-    "mb": 23.37,
+    "mb": 23.38,
     "element_depth_nm": 16.000000000000004,
     "slide_passes": 20,
     "equivalent_experimental_revolutions": 175.0

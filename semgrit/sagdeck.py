@@ -466,6 +466,12 @@ def plan(p: SAGParams) -> dict:
             resolves_dc=False,
         ),
         micro=dict(
+            # The paper's MEASURED chip thickness for this pad, which is what
+            # its dc is compared against and therefore what the MICRO deck
+            # cuts. See sagemit.write_micro for why this is not the Brinell
+            # indentation.
+            chip_depth_nm=(sum(sag.MEASURED_CHIP_NM[p.grain_um]) / 2.0
+                           if p.grain_um in sag.MEASURED_CHIP_NM else 0.0),
             side_mm=side, depth_mm=depth, grains=max(n_micro, 1),
             element_mm=el_depth_mm, element_inplane_mm=el_inplane_mm,
             elements=micro_elements, nx=nx, nz_fine=nz_fine,

@@ -31,6 +31,12 @@ The material card. 58 constants (not 56), SWMODE = 1, and the energy threshold
 ``H*dc``. Since dc for WC-Co is MEASURED, this is where a deck that quietly fell
 back on Bifano's 17x-too-large value would be caught.
 
+A CUT TOO SMALL TO MODEL. The imposed depth was once the static Brinell
+indentation -- 0.18 nm for the 30 um pad, against a 16 nm element and a 0.29 nm
+WC unit cell. One ninetieth of an element: no mesh represents it, and no
+continuum should be asked to. The deck was otherwise perfect and simply did
+nothing for days.
+
 A GRAIN THAT NEVER REACHES THE WORK. The MICRO deck seats the grain clear of
 the surface and pushes it in by the predicted indentation. If the standoff
 exceeds that indentation the ramp ends with the grain in mid-air, and the job
@@ -496,6 +502,61 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
                 % (hold, hold / timing["prony_tau_s"]))
 
 
+def check_resolvable(d: Deck, timing: dict) -> None:
+    """Is the cut big enough for the mesh -- and for a continuum -- to see?
+
+    A deck can be geometrically perfect, correctly constrained, and still
+    describe a deformation no finite element can represent. This one did: the
+    imposed depth was the static Brinell indentation, 0.18 nm for the 30 um
+    pad, against a 16 nm surface element. One ninetieth of a single element,
+    and smaller than a WC unit cell at ~0.29 nm. The contact algorithm sees a
+    penetration far below the node spacing and the resulting strain is
+    numerically indistinguishable from zero, so the job runs for days and the
+    energy history stays flat.
+
+    Nothing else catches it. The grammar is valid, the geometry closes, the
+    material card is right, the grain reaches the surface -- and the model
+    still cannot do anything.
+
+    The rule: the cut must be at least a couple of elements deep, and comfortably
+    above the lattice scale of the material being cut.
+    """
+    print("\n8. is the cut deep enough to be resolvable?")
+    work = d.parts.get("WORK")
+    if not work:
+        print("       (not a MICRO deck: skipped)")
+        return
+
+    depth = 0.0
+    for kwd, pars, data, _ in d.kw("boundary"):
+        if str(pars.get("type", "")).lower() == "velocity":
+            continue
+        for ln in data:
+            f = [x.strip() for x in ln.split(",")]
+            if len(f) >= 4 and f[1] == "3" and f[2] == "3" and f[3]:
+                depth = max(depth, abs(float(f[3])))
+    if depth <= 0:
+        chk("a cut depth is imposed", False, "no dof-3 displacement found")
+        return
+
+    st = hex_stats(work)
+    el = st["min_edge"]
+    n_el = depth / el if el > 0 else 0.0
+    chk("the cut spans at least two elements", n_el >= 2.0,
+        "%.4f nm cut against a %.4f nm element = %.2f elements. Below one, "
+        "the contact penetration is smaller than the node spacing and the "
+        "strain is numerically zero"
+        % (depth * 1e6, el * 1e6, n_el))
+
+    # Lattice scale of the material being cut. WC is ~0.29 nm; anything in
+    # this family is a few tenths of a nanometre.
+    lattice_mm = 0.3e-6
+    chk("the cut is well above the lattice scale", depth > 20.0 * lattice_mm,
+        "%.4f nm against a ~0.3 nm unit cell -- below a few nanometres a "
+        "continuum model is describing something that is not a continuum"
+        % (depth * 1e6))
+
+
 def check_reachable(d: Deck) -> None:
     """Can the grain actually reach the workpiece?
 
@@ -514,7 +575,7 @@ def check_reachable(d: Deck) -> None:
     Measured here from the deck's own node coordinates, not from any number
     the writer reported.
     """
-    print("\n8. can the grain reach the workpiece?")
+    print("\n9. can the grain reach the workpiece?")
     work = d.parts.get("WORK")
     grains = d.parts.get("GRAINS")
     if not (work and grains):
@@ -567,7 +628,7 @@ def check_rigid_mass(d: Deck) -> None:
     the material card -- because none of them asked whether the model could
     move.
     """
-    print("\n9. can every rigid body actually move?")
+    print("\n10. can every rigid body actually move?")
     rb = d.kw("rigid body")
     if not rb:
         print("       (no rigid bodies in this deck)")
@@ -613,7 +674,7 @@ def check_rigid_mass(d: Deck) -> None:
 
 def check_sector(d: Deck, timing: dict) -> None:
     """The sector's own curvature must span the indent."""
-    print("\n10. can the modelled sector actually make contact?")
+    print("\n11. can the modelled sector actually make contact?")
     pu = d.parts.get("PU")
     if not pu or not timing:
         print("       (not a MACRO deck, or no plan supplied: skipped)")
@@ -633,7 +694,7 @@ def check_sector(d: Deck, timing: dict) -> None:
 
 
 def check_seating(d: Deck, timing: dict) -> None:
-    print("\n11. is the tool seated at first contact?")
+    print("\n12. is the tool seated at first contact?")
     ins = {b[1].get("name"): b for b in d.kw("instance")}
     pu = d.parts.get("PU")
     work = d.parts.get("WORK")
@@ -671,7 +732,7 @@ def converge(refinements=(3.0, 5.0, 8.0, 12.0)) -> None:
     """
     from semgrit import materials, sagdeck
 
-    print("\n12. mesh convergence of the energy criterion")
+    print("\n13. mesh convergence of the energy criterion")
     w = materials.get("wc_co")
     hp = w.hybrid_params()
     dc = hp.critical_depth_mm()
@@ -724,6 +785,7 @@ def verify(path: str, timing: dict = None) -> None:
     check_material(d)
     check_geometry(d, macro)
     check_steps(d, macro, timing or {})
+    check_resolvable(d, timing or {})
     check_reachable(d)
     check_rigid_mass(d)
     if macro:
