@@ -28,14 +28,23 @@ a flat energy history. That is what the earlier rounds did.
 
 ## First 30 seconds tell you it is working
 
-The packager prints the model mass. It should read **1.69695e-14** — workpiece
-plus the grain. If it reads 1.65714e-14, the grain has no mass and the deck
-is an old one.
+**Check the job name, not the mass.** The console prints `Abaqus JOB sagv2_6um`.
+That is the only identifier that distinguishes this build from an earlier one.
 
-Then watch KINETIC ENERGY. It should leave zero within the first few output
-frames, once the grain closes its 4.0 nm standoff — about 5%
-of the way through step LOAD. Energy that stays at exactly zero past the first
-frame means nothing is touching.
+The packager reports a model mass of **1.65714e-14** — the workpiece alone.
+That is correct and expected: the grain is a rigid body of R3D3 facets, which
+carry no volume, and Abaqus permits a massless rigid body when every
+translational dof is constrained. All three are, in every step here. (An
+earlier README told you to expect a larger number. That was wrong — the
+`*Mass` card it referred to was silently ignored by Abaqus, and a second
+attempt to add mass properly aborted the input processor. The mass was only
+ever wanted as a build identifier, and the job name does that job.)
+
+Then watch KINETIC ENERGY. It is zero while the grain closes its
+4.00 nm standoff, which the smooth-step ramp covers by
+**13.5%** of step LOAD — output **frame 3 of 20**.
+It must be non-zero by then. If frame 4 is still exactly zero,
+nothing is touching and the run is not worth continuing.
 
 ## What to plot
 

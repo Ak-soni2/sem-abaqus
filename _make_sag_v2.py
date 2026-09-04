@@ -132,14 +132,23 @@ a flat energy history. That is what the earlier rounds did.
 
 ## First 30 seconds tell you it is working
 
-The packager prints the model mass. It should read **{mass:.5e}** — workpiece
-plus the grain. If it reads {wp_mass:.5e}, the grain has no mass and the deck
-is an old one.
+**Check the job name, not the mass.** The console prints `Abaqus JOB {job}`.
+That is the only identifier that distinguishes this build from an earlier one.
 
-Then watch KINETIC ENERGY. It should leave zero within the first few output
-frames, once the grain closes its {standoff:.1f} nm standoff — about {pct:.0f}%
-of the way through step LOAD. Energy that stays at exactly zero past the first
-frame means nothing is touching.
+The packager reports a model mass of **{wp_mass:.5e}** — the workpiece alone.
+That is correct and expected: the grain is a rigid body of R3D3 facets, which
+carry no volume, and Abaqus permits a massless rigid body when every
+translational dof is constrained. All three are, in every step here. (An
+earlier README told you to expect a larger number. That was wrong — the
+`*Mass` card it referred to was silently ignored by Abaqus, and a second
+attempt to add mass properly aborted the input processor. The mass was only
+ever wanted as a build identifier, and the job name does that job.)
+
+Then watch KINETIC ENERGY. It is zero while the grain closes its
+{standoff:.2f} nm standoff, which the smooth-step ramp covers by
+**{contact_pct:.1f}%** of step LOAD — output **frame {contact_frame} of 20**.
+It must be non-zero by then. If frame {check_frame} is still exactly zero,
+nothing is touching and the run is not worth continuing.
 
 ## What to plot
 
@@ -176,6 +185,32 @@ EXPECT = {
           "all its passes, the energy criterion accumulates too slowly — a "
           "finding about the criterion, not a bug in the deck.",
 }
+
+
+def _contact_fraction(standoff_mm, depth_mm):
+    """Fraction of the LOAD step at which the grain first touches.
+
+    The ramp is SMOOTH STEP, a(x) = 3x^2 - 2x^3, so contact is not at
+    standoff/depth -- the ramp starts slow. Solved rather than approximated,
+    because this number is what the reader is told to check.
+    """
+    if depth_mm <= 0:
+        return 0.0
+    target = standoff_mm / depth_mm
+    lo, hi = 0.0, 1.0
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        if 3 * mid * mid - 2 * mid ** 3 < target:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
+def _contact_frame(standoff_mm, depth_mm, frames=20):
+    """First output frame at or after contact."""
+    import math as _m
+    return int(_m.ceil(_contact_fraction(standoff_mm, depth_mm) * frames))
 
 
 def main(argv):
@@ -233,7 +268,13 @@ def main(argv):
                 el=mi["element_depth_mm"] * 1e6, passes=mi["n_passes"],
                 hours=hours[dg], mass=wp + mi["grain_mass_tonne"],
                 wp_mass=wp, standoff=mi["standoff_mm"] * 1e6,
-                pct=100.0 * mi["standoff_over_indent"], expect=EXPECT[dg]))
+                contact_pct=100.0 * _contact_fraction(
+                    mi["standoff_mm"], mi["indentation_mm"]),
+                contact_frame=_contact_frame(
+                    mi["standoff_mm"], mi["indentation_mm"]),
+                check_frame=_contact_frame(
+                    mi["standoff_mm"], mi["indentation_mm"]) + 1,
+                expect=EXPECT[dg]))
 
         recs.append(dict(pad=dg, job=job,
                          path=os.path.relpath(mi["path"], HERE),

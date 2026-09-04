@@ -529,8 +529,9 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
             "values for 6, 15 and 30 um." % p.grain_um)
     indent_mm = chip_nm * 1e-6
     n_gr = max(int(mic["grains"]), 1)
-    # Diamond, as a sphere of the nominal grain size. Only used for the *Mass
-    # card; the dynamics are displacement-controlled.
+    # Diamond, as a sphere of the nominal grain size. REPORTED only -- the
+    # rigid body is deliberately massless (see the assembly comment), and the
+    # dynamics are displacement-controlled regardless.
     grain_mass_t = (3520.0 * 1e-12 * (math.pi / 6.0)
                     * (p.grain_um * 1e-3) ** 3 * n_gr)
     gv, gf, gtags = _grain_parts(
@@ -591,28 +592,27 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     a("*End Instance")
     a("*Instance, name=GRAINS-1, part=GRAINS")
     a("*End Instance")
-    # An element number no facet uses. The MASS element lives in the
-    # assembly, so it only has to be unique there.
-    mass_elem_id = len(gf) + 1000
     a("*Nset, nset=NS_GRAIN_REF, instance=GRAINS-1")
     a(" 1,")
     a("*Rigid Body, ref node=NS_GRAIN_REF, elset=GRAINS-1.ES_GRAINS")
     a("**")
-    a("** R3D3 facets carry no volume, so the rigid body has no mass of its")
-    a("** own. Abaqus refuses a massless rigid body unless every")
-    a("** translational dof is constrained -- all three ARE constrained in")
-    a("** every step here, so the model is valid either way -- but the real")
-    a("** diamond mass is given anyway, and it is given as a MASS ELEMENT.")
+    a("** NO MASS, DELIBERATELY. R3D3 facets carry no volume, so this rigid")
+    a("** body has none -- and it does not need any: Abaqus permits a")
+    a("** massless rigid body when every translational dof is constrained,")
+    a("** and all three are, in every step of this deck. There is no free")
+    a("** translation for a = F/m to be undefined on.")
     a("**")
-    a("** *Mass, elset=<R3D3 set> does NOT work: that card assigns to MASS")
-    a("** elements, and pointing it at rigid facets assigns to nothing. It is")
-    a("** accepted and ignored, and the packager's reported total silently")
-    a("** stays at the workpiece alone -- which is exactly how a deck that")
-    a("** looked correct on disk kept reporting the wrong mass.")
-    a("*Element, type=MASS, elset=ES_GRAIN_MASS")
-    a(" %d, NS_GRAIN_REF" % (mass_elem_id,))
-    a("*Mass, elset=ES_GRAIN_MASS")
-    a(" %s," % _fmt(grain_mass_t))
+    a("** Two attempts to add it anyway both failed, and both failed quietly")
+    a("** enough to be worth recording:")
+    a("**   *Mass, elset=<the R3D3 set>  is accepted and IGNORED -- that card")
+    a("**     assigns to MASS elements, so pointing it at rigid facets")
+    a("**     assigns to nothing and the reported model mass never changes.")
+    a("**   *Element, type=MASS in the assembly needs NODE NUMBERS and a node")
+    a("**     to attach to; NS_GRAIN_REF is a node SET, and there are no free")
+    a("**     nodes at assembly level. That one aborts the input processor.")
+    a("**")
+    a("** The mass was only ever wanted as a way to tell one build of this")
+    a("** deck from another. The job name does that job properly.")
     a("*End Assembly")
     a("**")
     a("*Section Controls, name=EC1, DISTORTION CONTROL=YES,"

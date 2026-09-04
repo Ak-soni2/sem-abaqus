@@ -239,6 +239,26 @@ def check_grammar(d: Deck) -> None:
     chk("no unresolved format placeholder survived",
         "%s" not in t and "%d" not in t and "{" not in t)
     chk("the deck is pure ASCII", all(ord(c) < 128 for c in t[:200000]))
+
+    # Element data lines must be all integers. A node SET name where a node
+    # NUMBER belongs aborts the input processor -- which is what
+    # "*Element, type=MASS / 1044, NS_GRAIN_REF" did, after passing every
+    # other check in this file.
+    bad_el = []
+    cur = None
+    for n, ln in enumerate(t.splitlines(), 1):
+        if ln.startswith("**"):
+            continue
+        if ln.startswith("*"):
+            cur = ln[1:].split(",")[0].strip().lower()
+            continue
+        if cur == "element" and ln.strip():
+            f = [x.strip() for x in ln.split(",") if x.strip()]
+            if not all(x.replace("-", "").isdigit() for x in f):
+                bad_el.append((n, ln.strip()[:60]))
+    chk("every *Element data line is numeric", not bad_el,
+        "%s -- a node SET name where a node NUMBER belongs aborts the input "
+        "processor" % (bad_el[:2] or ""))
     ints = [b for b in d.blocks if b[0] == "instance"]
     chk("every instance names an existing part",
         all(b[1].get("part") in d.parts for b in ints),
