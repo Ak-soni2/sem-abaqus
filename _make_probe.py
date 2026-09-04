@@ -233,14 +233,23 @@ def write_probe(folder: str, props, depvar, delete_sdv, dc_mm, material,
         fh.write("rem Step 0: does the Fortran toolchain work at all?\r\n")
         fh.write("call abaqus verify -user_exp\r\n")
         fh.write("rem Step 1: preprocessing only. Seconds. Reads the card.\r\n")
-        fh.write("call " + line + " datacheck\r\n")
+        # The datacheck submits under its OWN job name, <job>_check. A datacheck
+        # is a real submission: it writes <job>.lck and LEAVES it, because the job
+        # never completed. A solve reusing that name then aborts with "Detected
+        # lock file" on a job that has never been run. Renaming means the
+        # conflicting lock is never created, which is better than deleting locks --
+        # a lock is sometimes real, and blindly removing one would clobber a live
+        # job.
+        fh.write("call " + line.replace("job=probe ", "job=probe_check ")
+                 + " datacheck\r\n")
         fh.write("if errorlevel 1 exit /b 1\r\n")
         fh.write("rem Step 2: solve it.\r\n")
         fh.write("call " + line + " interactive\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
         fh.write("#!/bin/sh\nset -e\ncd \"$(dirname \"$0\")\"\n")
         fh.write("abaqus verify -user_exp\n")
-        fh.write(line + " datacheck\n" + line + " interactive\n")
+        fh.write(line.replace("job=probe ", "job=probe_check ")
+                 + " datacheck\n" + line + " interactive\n")
 
     exp = ["# What to accept", "",
            "Material: **%s**, dc = **%.4f nm**, card copied from `%s`."

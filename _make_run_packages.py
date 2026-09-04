@@ -195,6 +195,15 @@ def command_file(folder, job, deck, subroutine, cores=8):
     base = ("abaqus job=%s input=%s user=%s double=both"
             % (job, deck, subroutine))
     line = "%s cpus=%d interactive" % (base, cores)
+    # The datacheck submits under its OWN job name, <job>_check. A datacheck
+    # is a real submission: it writes <job>.lck and LEAVES it, because the job
+    # never completed. A solve reusing that name then aborts with "Detected
+    # lock file" on a job that has never been run. Renaming means the
+    # conflicting lock is never created, which is better than deleting locks --
+    # a lock is sometimes real, and blindly removing one would clobber a live
+    # job.
+    check = ("abaqus job=%s_check input=%s user=%s double=both"
+             % (job, deck, subroutine))
     # Step 1 is a DATACHECK, and it is not politeness. It costs seconds, reads
     # the whole material card and every keyword, and it is exactly the stage the
     # only real submission this project has ever made died at. Finding a card
@@ -236,7 +245,7 @@ def command_file(folder, job, deck, subroutine, cores=8):
         for ln in rem:
             fh.write(("rem  " + ln).rstrip() + "\r\n")
         fh.write("call abaqus verify -user_exp\r\n")
-        fh.write("call " + base + " cpus=1 datacheck\r\n")
+        fh.write("call " + check + " cpus=1 datacheck\r\n")
         fh.write("if errorlevel 1 exit /b 1\r\n")
         fh.write("call " + line + "\r\n")
     with open(os.path.join(folder, "run.sh"), "w", newline="\n") as fh:
@@ -244,7 +253,7 @@ def command_file(folder, job, deck, subroutine, cores=8):
         for ln in rem:
             fh.write(("#  " + ln).rstrip() + "\n")
         fh.write("abaqus verify -user_exp\n")
-        fh.write(base + " cpus=1 datacheck\n")
+        fh.write(check + " cpus=1 datacheck\n")
         fh.write(line + "\n")
     return line
 

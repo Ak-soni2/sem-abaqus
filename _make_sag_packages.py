@@ -48,6 +48,14 @@ rem       The one real submission this project ever made died here, on
 rem       *User Material written four values to a line instead of eight.
 rem    2. the solve, ~{hours} h on 8 cores.
 rem
+rem  The datacheck submits under its OWN job name, {job}_check. A datacheck
+rem  is a real submission: it writes <job>.lck and LEAVES it, because the
+rem  job never completed. A solve reusing that name then aborts with
+rem  "Detected lock file" on a job that has never been run. Renaming means
+rem  the conflicting lock is never created -- better than deleting locks,
+rem  since a lock is sometimes real and blindly removing one would clobber
+rem  a live job.
+rem
 rem  double=both is REQUIRED. h and dc are compared at 80 nm against a
 rem  millimetre geometry; single precision has ~7 digits and does not have
 rem  them. The failure is SILENT -- the branch flag comes out wrong and the
@@ -68,10 +76,10 @@ if errorlevel 1 (
   echo  Check that the Fortran compiler is on PATH and linked to Abaqus.
   exit /b 1
 )
-call abaqus job={job} input={job}.inp user={sub} double=both cpus=1 datacheck
+call abaqus job={job}_check input={job}.inp user={sub} double=both cpus=1 datacheck
 if errorlevel 1 (
   echo.
-  echo  DATACHECK FAILED -- read {job}.dat, the error is a keyword or the
+  echo  DATACHECK FAILED -- read {job}_check.dat, the error is a keyword or the
   echo  material card, not the physics. Nothing has been solved yet.
   exit /b 1
 )
@@ -91,8 +99,8 @@ abaqus verify -user_exp || {{
   echo "Abaqus cannot build a user subroutine on this machine." >&2
   exit 1
 }}
-abaqus job={job} input={job}.inp user={sub} double=both cpus=1 datacheck || {{
-  echo "DATACHECK FAILED -- read {job}.dat. Nothing has been solved yet." >&2
+abaqus job={job}_check input={job}.inp user={sub} double=both cpus=1 datacheck || {{
+  echo "DATACHECK FAILED -- read {job}_check.dat. Nothing has been solved yet." >&2
   exit 1
 }}
 echo "datacheck passed. Solving -- about {hours} h on 8 cores."

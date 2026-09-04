@@ -172,7 +172,15 @@ def write_arms(deck_in: str, outdir: str, *,
         line = base + " cpus=%d interactive" % cores
         # datacheck is serial work: cpus=1 needs 5 licence tokens against the 12
         # that cpus=8 reserves, and it is not a second faster for spending them.
-        check = base + " cpus=1 datacheck"
+        # The datacheck submits under its OWN job name, <job>_check. A datacheck
+        # is a real submission: it writes <job>.lck and LEAVES it, because the job
+        # never completed. A solve reusing that name then aborts with "Detected
+        # lock file" on a job that has never been run. Renaming means the
+        # conflicting lock is never created, which is better than deleting locks --
+        # a lock is sometimes real, and blindly removing one would clobber a live
+        # job.
+        check = (base.replace("job=%s " % job, "job=%s_check " % job)
+                 + " cpus=1 datacheck")
         with open(os.path.join(folder, "run.bat"), "w", newline="") as fh:
             fh.write("@echo off\r\ncd /d \"%~dp0\"\r\n")
             # `call`, because on Windows abaqus is abaqus.bat and

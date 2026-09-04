@@ -6,8 +6,8 @@ abaqus verify -user_exp || {
   echo "Abaqus cannot build a user subroutine on this machine." >&2
   exit 1
 }
-abaqus job=micro_15um input=micro_15um.inp user=vumat_grind2.for double=both cpus=1 datacheck || {
-  echo "DATACHECK FAILED -- read micro_15um.dat. Nothing has been solved yet." >&2
+abaqus job=micro_15um_check input=micro_15um.inp user=vumat_grind2.for double=both cpus=1 datacheck || {
+  echo "DATACHECK FAILED -- read micro_15um_check.dat. Nothing has been solved yet." >&2
   exit 1
 }
 echo "datacheck passed. Solving -- about 162 h on 8 cores."

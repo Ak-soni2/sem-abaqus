@@ -36,6 +36,15 @@ WHAT IS CHECKED
 * A datacheck runs before the solve, and the script stops if it fails --
   `errorlevel` on Windows, `||` or `set -e` on POSIX.
 * run.bat is CRLF. A LF-only .bat misparses on some Windows setups.
+* The datacheck runs under its OWN job name. A datacheck is a real
+  submission: it writes ``<job>.lck`` and leaves it, so a solve reusing
+  that name aborts with "Detected lock file" on a job that has never
+  been run. Every launcher here shared one name, so every one failed on
+  first use.
+* The datacheck runs under its OWN job name. A datacheck is a real submission:
+  it writes ``<job>.lck`` and leaves it, so a solve reusing that name aborts
+  with "Detected lock file" on a job that has never been run. Every launcher
+  in this project shared one name, so every one failed on first use.
 * Every ``abaqus`` line in a run.bat is ``call``ed. On Windows ``abaqus`` is
   ``abaqus.bat``, and running one batch file from another WITHOUT ``call``
   transfers control permanently -- the caller never resumes. This bit the
@@ -151,6 +160,25 @@ def check(path):
             chk("%s: it stops if the datacheck fails" % rel, bool(guards),
                 "otherwise the solve starts anyway and the datacheck was "
                 "decoration")
+
+    # --- the datacheck must not lock out the solve ----------------------
+    # A datacheck is a real submission: it writes <job>.lck and LEAVES it,
+    # because the job never completed. A solve reusing that name then
+    # aborts with "Detected lock file" on a job that has never been run.
+    dc_jobs = set(re.findall(
+        r"abaqus\s+job=([\w.\-]+)[^\n]*?datacheck", s))
+    all_jobs = set(re.findall(r"abaqus\s+job=([\w.\-]+)", s))
+    clash = dc_jobs & (all_jobs - dc_jobs)
+    if dc_jobs:
+        # A shared name is a clash even when the solve line is the only
+        # other user of it, so compare against every job= on the page.
+        shared = sorted(j for j in dc_jobs
+                        if len(re.findall(r"job=%s\b" % re.escape(j), s))
+                        > 1)
+        chk("%s: the datacheck uses its own job name" % rel, not shared,
+            "%s is used for BOTH the datacheck and the solve -- the "
+            "datacheck leaves <job>.lck behind and the solve then refuses "
+            "to start on a job that has never run" % (shared or ""))
 
     # --- `call` on every abaqus line, in .bat only ----------------------
     if bat:

@@ -19,5 +19,5 @@ cd "$(dirname "$0")"
 #  LICENCE: cpus=8 needs int(5*8^0.422) = 12 Abaqus tokens, against 5
 #  at cpus=1. Every wall clock in the README is the 8-core figure.
 abaqus verify -user_exp
-abaqus job=multi_abrasive input=multi_abrasive_field.inp user=vumat_grind.for double=both cpus=1 datacheck
+abaqus job=multi_abrasive_check input=multi_abrasive_field.inp user=vumat_grind.for double=both cpus=1 datacheck
 abaqus job=multi_abrasive input=multi_abrasive_field.inp user=vumat_grind.for double=both cpus=8 interactive
