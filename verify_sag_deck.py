@@ -633,7 +633,26 @@ def check_rigid_mass(d: Deck) -> None:
     if not rb:
         print("       (no rigid bodies in this deck)")
         return
-    has_mass = bool(d.kw("mass")) or bool(d.kw("inertia"))
+    # A *Mass card only counts if its ELSET actually contains MASS elements.
+    # *Mass pointed at a set of R3D3 rigid facets is accepted and IGNORED --
+    # the packager's reported total silently stays at the workpiece alone,
+    # which is how a deck that looked right on disk kept under-reporting.
+    mass_elsets = set()
+    for kwd, pars, data, _ in d.kw("element"):
+        if str(pars.get("type", "")).upper() == "MASS":
+            e = pars.get("elset")
+            if e:
+                mass_elsets.add(e.upper())
+    real_mass = False
+    for kwd, pars, data, _ in d.kw("mass"):
+        e = str(pars.get("elset", "")).upper()
+        if e in mass_elsets:
+            real_mass = True
+        else:
+            chk("a *Mass card names a set of MASS elements", False,
+                "elset=%s holds no *Element, type=MASS -- Abaqus accepts this "
+                "card and ignores it, and the model mass is unchanged" % e)
+    has_mass = real_mass or bool(d.kw("inertia"))
     # Which reference-node dofs are constrained, anywhere in the deck?
     refs = set()
     for _, pars, _, _ in rb:
