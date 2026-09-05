@@ -571,11 +571,27 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     L += _elem_lines(conn)
     a("*Elset, elset=%s, generate" % ES_WORK)
     a(" 1, %d, 1" % len(conn))
+    nz_el = len(meta["z_planes"]) - 1
+    n_per_col = nz_el
+    n_top_last = len(conn) - nz_el + 1
     a("*Nset, nset=%s" % NS_WORK_FIXED)
     L += _pack_ids(sorted(set(meta["bottom"]) | set(meta["sides"])))
     a("*Solid Section, elset=%s, controls=EC1, material=%s"
       % (ES_WORK, w.inp_material))
     a(" ,")
+    a("**")
+    a("** The ground face, named so the contact pair has something to bind")
+    a("** to.")
+    a("**")
+    a("** S2, and the code was CHECKED rather than assumed. build_block")
+    a("** writes each C3D8R with its lower k-plane first, so local nodes 5-8")
+    a("** are the ones at the ground face -- and 5678 is S2. S5 is 3487, a")
+    a("** SIDE face: naming that would have hung the contact surface")
+    a("** vertically and the grain would still have met nothing.")
+    a("*Elset, elset=ES_WORK_TOP, generate")
+    a(" 1, %d, %d" % (n_top_last, n_per_col))
+    a("*Surface, type=ELEMENT, name=SURF_WORK")
+    a(" ES_WORK_TOP, S2")
     a("*End Part")
     a("**")
     a("*Part, name=GRAINS")
@@ -585,6 +601,22 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     L += _elem_lines(gf)
     a("*Elset, elset=ES_GRAINS, generate")
     a(" 1, %d, 1" % len(gf))
+    a("**")
+    a("** AN EXPLICIT SURFACE ON THE FACETS, and it is not optional.")
+    a("**")
+    a("** *Contact Inclusions, ALL EXTERIOR gathers the free FACES of the")
+    a("** model. A rigid body made of R3D3 shell facets has no faces in that")
+    a("** sense -- it has two SIDES, SPOS and SNEG -- so ALL EXTERIOR does")
+    a("** not pick it up and the grain contributes nothing to the contact")
+    a("** domain. It then passes straight through the workpiece: no")
+    a("** resistance, no strain, and an energy history that stays at exactly")
+    a("** zero for the whole run. That is what four earlier builds of this")
+    a("** deck did.")
+    a("**")
+    a("** The reference CAE deck this model is based on names seven surfaces")
+    a("** explicitly for the same reason.")
+    a("*Surface, type=ELEMENT, name=SURF_GRAIN")
+    a(" ES_GRAINS, SPOS")
     a("*End Part")
     a("**")
     a("*Assembly, name=Assembly")
@@ -628,8 +660,22 @@ def write_micro(path: str, pl: dict, solids: Sequence, *,
     a("**")
     a("*Contact, op=NEW")
     a("*Contact Inclusions, ALL EXTERIOR")
+    a("** And the grain surface EXPLICITLY. ALL EXTERIOR does not include a")
+    a("** shell-facet rigid body, so without this line the pair below is the")
+    a("** only thing holding the grain out of the workpiece.")
+    a("*Contact Inclusions")
+    a(" GRAINS-1.SURF_GRAIN, WORK-1.SURF_WORK")
     a("*Contact Property Assignment")
     a(" ,  , IP_GRIND")
+    a("**")
+    a("** A CONTACT PAIR as well, deliberately belt-and-braces. General")
+    a("** contact is needed for element deletion -- deletion exposes")
+    a("** interior faces a pre-declared pair would never see -- but the pair")
+    a("** guarantees the grain/work interface exists from increment 1,")
+    a("** independent of how ALL EXTERIOR resolves a rigid facet body.")
+    a("*Contact Pair, interaction=IP_GRIND, mechanical constraint=PENALTY,"
+      " type=SURFACE TO SURFACE")
+    a(" WORK-1.SURF_WORK, GRAINS-1.SURF_GRAIN")
     a("**")
     a("*Boundary")
     a(" WORK-1.%s, ENCASTRE" % NS_WORK_FIXED)
@@ -822,7 +868,14 @@ def demo(outdir: str = "_sagemit_demo") -> None:
         # every deck must be explicit, general-contact, and say which
         assert "*Dynamic, Explicit" in txt
         assert "*Contact, op=NEW" in txt and "ALL EXTERIOR" in txt
-        assert "*Contact Pair" not in txt, "pairs cannot see deleted faces"
+        # A pair IS present, alongside general contact, and the earlier
+        # blanket ban was wrong. General contact is still required --
+        # element deletion exposes interior faces a pre-declared pair
+        # cannot see -- but ALL EXTERIOR does not gather a rigid
+        # SHELL-FACET body, so on its own it left the grain out of the
+        # contact domain entirely and the grain passed through the work.
+        # The pair guarantees the interface exists from increment 1.
+        assert "*Contact, op=NEW" in txt and "ALL EXTERIOR" in txt
         assert "constants=58" in txt, "the energy criterion needs 58"
         assert "*Depvar, delete=12" in txt
         # balanced parts and steps

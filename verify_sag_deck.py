@@ -271,11 +271,21 @@ def check_solver(d: Deck) -> None:
     chk("every step is Abaqus/Explicit",
         bool(dyn) and all("explicit" in b[1] for b in dyn),
         "%d *Dynamic block(s)" % len(dyn))
-    chk("general contact is used, not contact pairs",
-        bool(d.kw("contact")) and bool(d.kw("contact inclusions"))
-        and not d.kw("contact pair"),
-        "the VUMAT deletes elements, and deletion exposes interior faces "
-        "that a pre-declared pair would never see")
+    # General contact must be present. A pair MAY also be present, and the
+    # earlier blanket ban on pairs was wrong: ALL EXTERIOR does not gather a
+    # rigid shell-facet body, so general contact alone left the grain out of
+    # the contact domain and it passed through the workpiece. Both are used --
+    # general contact because element deletion exposes interior faces a
+    # pre-declared pair cannot see, the pair because it guarantees the
+    # grain/work interface exists from increment 1.
+    chk("general contact is used", bool(d.kw("contact"))
+        and bool(d.kw("contact inclusions")),
+        "element deletion exposes interior faces that only general contact "
+        "will pick up")
+    if d.kw("contact pair"):
+        chk("a contact pair is accompanied by general contact",
+            bool(d.kw("contact inclusions")),
+            "a pair alone cannot see faces exposed by element deletion")
     ci = d.one("contact inclusions")
     chk("the contact domain is ALL EXTERIOR",
         ci is not None and "all exterior" in ci[1])
@@ -522,6 +532,85 @@ def check_steps(d: Deck, macro: bool, timing: dict) -> None:
                 % (hold, hold / timing["prony_tau_s"]))
 
 
+def check_contact_surfaces(d: Deck) -> None:
+    """Is the grain actually IN the contact domain, on the right face?
+
+    Two failures live here, and both are silent.
+
+    ``*Contact Inclusions, ALL EXTERIOR`` gathers the free FACES of the model.
+    A rigid body built from R3D3 shell facets has no faces in that sense -- it
+    has two SIDES -- so ALL EXTERIOR does not pick it up. The grain then
+    contributes nothing to the contact domain and plunges straight through the
+    workpiece: no resistance, no strain, and an energy history that stays at
+    exactly zero. Four builds of this deck did that.
+
+    And a named surface can point at the WRONG FACE. build_block writes each
+    C3D8R with its lower k-plane first, so the ground face is local nodes 5-8,
+    which is S2. Naming S5 -- 3487 -- hangs the surface vertically down a side
+    of the block, and the grain meets nothing just the same.
+
+    So the face code is verified against the node coordinates rather than
+    trusted.
+    """
+    print("\n8. is the grain in the contact domain, on the right face?")
+    grains = d.parts.get("GRAINS")
+    work = d.parts.get("WORK")
+    if not (grains and work):
+        print("       (not a MICRO deck: skipped)")
+        return
+
+    surfs = {}
+    for kwd, pars, data, _ in d.kw("surface"):
+        nm = pars.get("name")
+        if nm:
+            surfs[nm.upper()] = [tuple(x.strip() for x in ln.split(","))
+                                 for ln in data]
+    chk("a surface is named on the rigid grain facets",
+        any("GRAIN" in k for k in surfs),
+        "ALL EXTERIOR does not gather a shell-facet rigid body, so without a "
+        "named surface the grain is not in the contact domain at all")
+    chk("a surface is named on the workpiece", any("WORK" in k for k in surfs),
+        "the contact pair needs something to bind to")
+
+    # The face code must actually be the ground face.
+    C3D8_FACES = {"S1": (0, 1, 2, 3), "S2": (4, 5, 6, 7), "S3": (0, 1, 5, 4),
+                  "S4": (1, 2, 6, 5), "S5": (2, 3, 7, 6), "S6": (3, 0, 4, 7)}
+    elsets = {}
+    for kwd, pars, data, _ in d.kw("elset"):
+        nm = str(pars.get("elset", "")).upper()
+        if not nm or "generate" not in pars:
+            continue
+        for ln in data:
+            f = [x.strip() for x in ln.split(",") if x.strip()]
+            if len(f) == 3:
+                elsets[nm] = list(range(int(f[0]), int(f[1]) + 1, int(f[2])))
+
+    top = max(z for _, _, z in work["nodes"].values())
+    for nm, rows in surfs.items():
+        if "WORK" not in nm:
+            continue
+        for row in rows:
+            if len(row) < 2:
+                continue
+            es, face = row[0].upper(), row[1].upper()
+            ids = elsets.get(es)
+            if not ids or face not in C3D8_FACES:
+                continue
+            idx = C3D8_FACES[face]
+            bad = 0
+            for e in ids[:500]:
+                conn = work["elements"].get(e)
+                if not conn or len(conn) != 8:
+                    continue
+                if any(abs(work["nodes"][conn[i]][2] - top) > 1e-12
+                       for i in idx):
+                    bad += 1
+            chk("%s/%s is the ground face, not a side" % (nm, face), bad == 0,
+                "%d of the first %d faces do not lie on z = %.6g -- the "
+                "surface would hang vertically and the grain would meet "
+                "nothing" % (bad, min(len(ids), 500), top))
+
+
 def check_resolvable(d: Deck, timing: dict) -> None:
     """Is the cut big enough for the mesh -- and for a continuum -- to see?
 
@@ -541,7 +630,7 @@ def check_resolvable(d: Deck, timing: dict) -> None:
     The rule: the cut must be at least a couple of elements deep, and comfortably
     above the lattice scale of the material being cut.
     """
-    print("\n8. is the cut deep enough to be resolvable?")
+    print("\n9. is the cut deep enough to be resolvable?")
     work = d.parts.get("WORK")
     if not work:
         print("       (not a MICRO deck: skipped)")
@@ -595,7 +684,7 @@ def check_reachable(d: Deck) -> None:
     Measured here from the deck's own node coordinates, not from any number
     the writer reported.
     """
-    print("\n9. can the grain reach the workpiece?")
+    print("\n10. can the grain reach the workpiece?")
     work = d.parts.get("WORK")
     grains = d.parts.get("GRAINS")
     if not (work and grains):
@@ -648,7 +737,7 @@ def check_rigid_mass(d: Deck) -> None:
     the material card -- because none of them asked whether the model could
     move.
     """
-    print("\n10. can every rigid body actually move?")
+    print("\n11. can every rigid body actually move?")
     rb = d.kw("rigid body")
     if not rb:
         print("       (no rigid bodies in this deck)")
@@ -713,7 +802,7 @@ def check_rigid_mass(d: Deck) -> None:
 
 def check_sector(d: Deck, timing: dict) -> None:
     """The sector's own curvature must span the indent."""
-    print("\n11. can the modelled sector actually make contact?")
+    print("\n12. can the modelled sector actually make contact?")
     pu = d.parts.get("PU")
     if not pu or not timing:
         print("       (not a MACRO deck, or no plan supplied: skipped)")
@@ -733,7 +822,7 @@ def check_sector(d: Deck, timing: dict) -> None:
 
 
 def check_seating(d: Deck, timing: dict) -> None:
-    print("\n12. is the tool seated at first contact?")
+    print("\n13. is the tool seated at first contact?")
     ins = {b[1].get("name"): b for b in d.kw("instance")}
     pu = d.parts.get("PU")
     work = d.parts.get("WORK")
@@ -771,7 +860,7 @@ def converge(refinements=(3.0, 5.0, 8.0, 12.0)) -> None:
     """
     from semgrit import materials, sagdeck
 
-    print("\n13. mesh convergence of the energy criterion")
+    print("\n14. mesh convergence of the energy criterion")
     w = materials.get("wc_co")
     hp = w.hybrid_params()
     dc = hp.critical_depth_mm()
@@ -824,6 +913,7 @@ def verify(path: str, timing: dict = None) -> None:
     check_material(d)
     check_geometry(d, macro)
     check_steps(d, macro, timing or {})
+    check_contact_surfaces(d)
     check_resolvable(d, timing or {})
     check_reachable(d)
     check_rigid_mass(d)
